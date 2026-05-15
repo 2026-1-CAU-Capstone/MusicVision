@@ -12,6 +12,8 @@
 /time_sig_cnn/data/raw_pages/val/
 /time_sig_cnn/data/raw_pages/test/
 
+/resources/
+
 
 .env
 __pycache__/

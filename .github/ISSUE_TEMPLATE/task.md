@@ -1,3 +1,11 @@
+---
+name: Task
+about: Track implementation work
+title: "[Task] "
+labels: task
+assignees: ""
+---
+
 <!--- Provide a short summary of the task in the title above -->
 
 ## Goal

@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 
-BASE_DIR = Path(__file__).resolve().parents[1]
+BASE_DIR = Path(__file__).resolve().parents[2]
 STORAGE_DIR = BASE_DIR / "storage"
 UPLOADS_DIR = STORAGE_DIR / "uploads"
 JOBS_DIR = STORAGE_DIR / "jobs"

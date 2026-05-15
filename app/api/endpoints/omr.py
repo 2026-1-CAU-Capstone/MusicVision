@@ -3,17 +3,17 @@ from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
-from app.config import ALLOWED_EXTENSIONS, BASE_DIR, JOBS_DIR
-from app.schemas import HealthResponse, JobStatusResponse, OMRProcessResponse
-from app.services import create_job_directories, run_omr_pipeline, save_upload_file, validate_job_id
+from app.core.config import ALLOWED_EXTENSIONS, BASE_DIR, JOBS_DIR
+from app.schemas.omr import JobStatusResponse, OMRProcessResponse
+from app.services.job_service import (
+    create_job_directories,
+    save_upload_file,
+    validate_job_id,
+)
+from app.services.omr_service import run_omr_pipeline
 
 
 router = APIRouter()
-
-
-@router.get("/health", response_model=HealthResponse)
-def health_check() -> HealthResponse:
-    return HealthResponse(status="ok")
 
 
 @router.post("/omr/process", response_model=OMRProcessResponse)

@@ -2,6 +2,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 
 from app.core.config import ALLOWED_EXTENSIONS, BASE_DIR, JOBS_DIR
 from app.schemas.omr import JobStatusResponse, OMRProcessResponse
@@ -65,3 +66,27 @@ def get_job_status(job_id: str) -> JobStatusResponse:
         return JobStatusResponse(job_id=safe_job_id, status="processing")
 
     return JobStatusResponse(job_id=safe_job_id, status="not_found")
+
+
+@router.get("/omr/jobs/{job_id}/musicxml", response_class=FileResponse)
+def get_job_musicxml(job_id: str) -> FileResponse:
+    """
+    Return the generated MusicXML file for a completed OMR job.
+
+    This is intended for service-to-service retrieval, such as a Spring Boot
+    backend fetching the OMR result before forwarding or storing it.
+    """
+    safe_job_id = validate_job_id(job_id)
+    musicxml_path = JOBS_DIR / safe_job_id / "output" / "score.musicxml"
+
+    if not musicxml_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="MusicXML result not found",
+        )
+
+    return FileResponse(
+        path=musicxml_path,
+        media_type="application/vnd.recordare.musicxml+xml",
+        filename="score.musicxml",
+    )

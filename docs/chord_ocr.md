@@ -1,0 +1,411 @@
+# Printed Chord OCR Architecture
+
+This branch adds printed chord-symbol OCR to the existing MusicVision OMR flow.
+It does **not** infer chords from HOMR-recognized notes. Instead, it reads chord
+symbols that are printed on the sheet image, such as `Dm7`, `G7`, and `Cmaj7`,
+and assigns them to visual measures.
+
+## Pipeline
+
+```text
+upload
+  -> preprocess input
+  -> run HOMR subprocess once
+      -> score.musicxml
+      -> geometry.json
+      -> homr_processed.png
+  -> run printed chord OCR on homr_processed.png
+  -> assign chord tokens to measures
+      -> prefer HOMR geometry
+      -> fall back to CV barline detection only when needed
+  -> render chord_assignment_overlay.png
+  -> write enriched chord_assignments.json
+```
+
+The HOMR subprocess boundary is intentionally preserved in this first pass.
+MusicVision still invokes vendored HOMR through the CLI and consumes additional
+artifacts afterward.
+
+## Why `homr_processed.png` matters
+
+HOMR autocrops and resizes input images before detection. The geometry exported
+in `geometry.json` is explicitly defined in the coordinate space of
+`homr_processed.png`.
+
+Chord OCR also runs on `homr_processed.png`, so OCR boxes and HOMR geometry align
+directly. The pipeline does not mix those processed coordinates with original
+upload coordinates.
+
+## HOMR sidecar artifacts
+
+For each successful job, HOMR now writes:
+
+| Artifact | Purpose |
+| --- | --- |
+| `score.musicxml` | Existing HOMR musical output |
+| `geometry.json` | Visual score geometry for downstream assignment |
+| `homr_processed.png` | Exact processed image used for geometry detection |
+| `chord_assignment_overlay.png` | Diagnostic view of measure assignment and OCR decisions |
+
+`geometry.json` contains:
+
+- processed image width and height
+- system envelopes derived from HOMR `MultiStaff` groupings
+- staff envelopes
+- detected barline boxes
+- an explicit `coordinate_space` value of `homr_processed_image`
+
+System envelopes are exported from `MultiStaff`, not from a flat list of staves,
+so one-staff lead-sheet systems and multi-staff systems share the same downstream
+assignment model.
+
+## Chord OCR and assignment
+
+The image-only first pass lives under `pipeline/chords/`:
+
+- `grammar.py` normalizes and validates printed chord text
+- `easyocr_backend.py` performs EasyOCR token extraction
+- `ocr_common.py` contains OCR preprocessing helpers
+- `token_filters.py` removes a small set of visually obvious non-chords
+- `measure_assignment.py` performs geometry-first assignment
+- `fallback_barlines.py` preserves the legacy CV detector as a fallback
+
+Assignment behavior:
+
+1. assign each OCR token to the nearest HOMR system by y-position
+2. build measure intervals from the barlines for that system
+3. place each token into a measure by x-position
+4. estimate beat position within the measure where practical
+5. use the CV fallback only if HOMR geometry is missing, incomplete, or unusable
+
+### Geometry repair heuristics
+
+HOMR geometry remains the preferred source of truth, but the assignment stage
+does two conservative repairs when HOMR geometry is clearly incomplete.
+
+#### 1. Preserve a leading first measure
+
+HOMR barlines are visual separators; the left edge of a system can also be the
+left boundary of the first measure even when no barline is drawn there.
+
+The current rule:
+
+- merge near-duplicate barline x-positions within `1 px`
+- treat gaps below `12 px` as non-measure noise
+- compute the median width of the remaining substantial gaps
+- add the system's left edge as a leading boundary when:
+
+```text
+leading_gap >= max(24 px, 0.25 * typical_measure_width)
+```
+
+This restored the first visual measure of each system in the Airegin sample.
+
+#### 2. Recover one missed interior barline inside an over-wide interval
+
+If one HOMR interval is much wider than the other measures in the same system,
+the assignment stage scans that interval in `homr_processed.png` for a plausible
+missing separator.
+
+An interval is considered **over-wide** only when:
+
+```text
+1.6 * typical_measure_width <= gap <= 2.5 * typical_measure_width
+```
+
+The scan uses the system-height ROI and looks for vertical connected components
+after a vertical morphological opening. A candidate is kept only when:
+
+```text
+height >= 75% of the system ROI height
+width  <= 12 px
+distance from either interval edge >= 24 px
+```
+
+If multiple candidates remain, the chosen split minimizes:
+
+```text
+abs((candidate_x - left_x)  - typical_measure_width)
++ abs((right_x - candidate_x) - typical_measure_width)
+```
+
+with midpoint proximity as the tiebreaker.
+
+This repaired the missed interior separator in Airegin's first system, moving
+`C7` from beat 3 of an over-wide measure to beat 1 of the following measure.
+
+#### How this differs from note stems
+
+The recovery pass does **not** claim that shape alone can perfectly separate
+barlines from note stems. Some note stems can also be narrow and tall.
+
+Instead, it reduces stem confusion through context:
+
+- it only searches intervals that are already measure-width outliers
+- it requires a separator to span most of the full staff/system ROI height
+- it prefers the candidate that restores ordinary-looking adjacent measure
+  widths
+
+So the current implementation is best described as a conservative
+**missing-boundary repair**, not a general-purpose visual barline classifier.
+
+The more permissive CV fallback detector in `fallback_barlines.py` remains
+separate and is still used only when HOMR geometry is missing or unusable.
+
+### OCR observability and conservative cleanup
+
+`chord_assignments.json` now preserves the OCR decision trail under `chord_ocr`:
+
+- `accepted_tokens`
+- `rejected_hits`
+- `filtered_hits`
+
+That distinction matters:
+
+- `rejected_hits` are EasyOCR reads that never passed the grammar/confidence gate
+- `filtered_hits` are grammar-valid reads that were later removed because the
+  visual context strongly suggested they were not chord symbols
+
+#### 1. Circled rehearsal-mark suppression
+
+Single-letter chord names such as `F` are legitimate, so the pipeline does **not**
+ban all one-character tokens. Instead, it only suppresses a single-letter token
+when a surrounding contour looks like a rehearsal-mark circle.
+
+The current rule is applied only to normalized single roots `A` through `G`.
+Inside a padded ROI around that token, a contour is considered circle-like when:
+
+```text
+1.15 <= contour_width  / token_width  <= 3.0
+1.15 <= contour_height / token_height <= 3.0
+0.75 <= contour_aspect_ratio <= 1.35
+```
+
+and the contour bounding box contains the token center.
+
+On Airegin, this removed the circled rehearsal `B` that EasyOCR read as raw text
+`8` and normalized to chord `B`.
+
+#### 2. Single-letter notation touching the staff
+
+The Airegin sample also produced a false positive where a musical glyph inside
+the notation was read as lowercase `e`, then normalized to chord `E`.
+
+For normalized single roots `A` through `G`, the current rule suppresses the
+token when:
+
+```text
+nearest_system_top_y - token_bottom_y <= 6 px
+```
+
+In other words, a one-letter token that touches or nearly touches the staff
+envelope is treated as notation rather than a printed chord label. The rule is
+intentionally limited to single-letter roots so multi-character labels such as
+`C7` or `Fm7` are not affected.
+
+#### 3. OCR text repairs added from observed EasyOCR misreads
+
+The grammar layer now handles a few sample-backed OCR confusions:
+
+| Raw OCR example | Corrected text |
+| --- | --- |
+| `cbmajz` | `Cbmaj7` |
+| `Bbinajz` | `Bbmaj7` |
+| `Bom?` | `Bbm7` |
+| `Fmn?` | `Fm7` |
+| `Gmzbs` | `Gm7b5` |
+
+These are deliberately narrow text repairs rather than general chord inference.
+The pipeline still does not invent a missing `7` when OCR omits it completely.
+
+### Diagnostic overlay
+
+Every completed run now writes:
+
+```text
+chord_assignment_overlay.png
+```
+
+The overlay is drawn directly on `homr_processed.png`, so it uses the same
+processed-image coordinate space as both OCR boxes and HOMR geometry.
+
+Current legend:
+
+| Colour | Meaning |
+| --- | --- |
+| blue | visual measure boxes and measure labels |
+| green | assigned chord tokens, labelled with measure and beat |
+| orange | grammar-valid OCR hits removed by the contextual filters |
+| red | OCR hits rejected before assignment |
+
+This artifact is intentionally diagnostic rather than presentation-oriented. It
+exists to make geometry repairs, OCR cleanup, and assignment mistakes inspectable
+without re-running a debugger.
+
+## Chord-assignment payload
+
+`chord_assignments.json` keeps the job-level metadata and includes structured
+pages, systems, measures, assigned chords, OCR diagnostics, and an explicit
+MusicXML-alignment summary. Each page includes an `assignment_source` value:
+
+- `homr_geometry`
+- `cv_fallback`
+
+Example shape:
+
+```json
+{
+  "job_id": "demo-job",
+  "musicxml_file": "score.musicxml",
+  "geometry_file": "geometry.json",
+  "processed_image_file": "homr_processed.png",
+  "overlay_file": "chord_assignment_overlay.png",
+  "measure_alignment": {
+    "status": "aligned",
+    "musicxml_measure_count": 45,
+    "visual_measure_count": 45
+  },
+  "chord_ocr": {
+    "backend": "easyocr",
+    "accepted_tokens": [],
+    "rejected_hits": [],
+    "filtered_hits": []
+  },
+  "pages": [
+    {
+      "page": 1,
+      "assignment_source": "homr_geometry",
+      "systems": [
+        {
+          "index": 1,
+          "measures": [
+            {
+              "index": 1,
+              "musicxml_measure_number": "1",
+              "chords": [
+                {
+                  "text_raw": "Dm7",
+                  "text_norm": "Dm7",
+                  "beat": 2
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Measure alignment with MusicXML
+
+After HOMR produces `score.musicxml`, the pipeline reads the MusicXML measure
+sequence and compares it with the visual measure sequence used for chord
+assignment.
+
+If the counts match, the payload reports:
+
+```json
+"measure_alignment": {
+  "status": "aligned",
+  "musicxml_measure_count": 45,
+  "visual_measure_count": 45
+}
+```
+
+and each visual measure receives its corresponding
+`musicxml_measure_number`.
+
+If the counts do **not** match, the payload reports:
+
+```json
+"measure_alignment": {
+  "status": "mismatch",
+  "musicxml_measure_count": 45,
+  "visual_measure_count": 44
+}
+```
+
+and the pipeline intentionally does **not** guess a one-to-one mapping. That
+keeps downstream consumers from silently combining incompatible sequences.
+
+## API surface
+
+Existing MusicXML retrieval remains unchanged:
+
+```text
+GET /omr/jobs/{job_id}/musicxml
+```
+
+Structured chord-assignment retrieval is now available at:
+
+```text
+GET /omr/jobs/{job_id}/chord-assignments
+```
+
+## Manual verification
+
+For a real local smoke test, run the service and post a bundled sample image:
+
+```powershell
+uvicorn app.main:app --reload
+curl.exe -F "file=@resources/airegin-miles_davis.png" -F "job_id=manual-e2e-airegin" http://127.0.0.1:8000/omr/process
+```
+
+Then inspect:
+
+```text
+storage/jobs/manual-e2e-airegin/output/score.musicxml
+storage/jobs/manual-e2e-airegin/output/geometry.json
+storage/jobs/manual-e2e-airegin/output/homr_processed.png
+storage/jobs/manual-e2e-airegin/output/chord_assignment_overlay.png
+storage/jobs/manual-e2e-airegin/output/chord_assignments.json
+```
+
+The first EasyOCR run may take longer if the model weights are not already
+present in the local EasyOCR cache.
+
+## Runtime dependencies
+
+MusicVision now declares `numpy` and `opencv-python-headless` directly in the
+root `requirements.txt` because code under `pipeline/chords/` imports both
+directly.
+
+Important detail:
+
+- the import name is `cv2`
+- the package to install is `opencv-python-headless`
+
+If an editor or shell reports missing `cv2` / `numpy`, first make sure it is
+using this repo's virtual environment, for example:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+and select `.\.venv\Scripts\python.exe` as the interpreter in the editor.
+
+## Current first-pass scope
+
+Included:
+
+- raster image inputs already supported by MusicVision
+- EasyOCR printed chord extraction
+- HOMR-geometry-first measure assignment
+- CV barline fallback
+
+Intentionally deferred:
+
+- vector PDF extraction
+- TrOCR support
+- HOMR in-process refactor
+- reconstructing original-upload coordinates from processed-image coordinates
+- broad OCR recovery when EasyOCR drops characters entirely, such as a missing
+  trailing `7`
+
+For a chronological record of the implementation changes and verification
+results, see `docs/chord_ocr_changelog.md`.
+
+For a metrics-focused before/after summary of the Airegin reference run, see
+`docs/chord_ocr_progress_metrics.md`.

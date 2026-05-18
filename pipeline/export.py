@@ -1,16 +1,24 @@
 import json
 from pathlib import Path
+from typing import Any
 
 
-def export_result_json(*, result_payload: dict[str, str], output_dir: Path) -> Path:
+CHORD_ASSIGNMENTS_FILENAME = "chord_assignments.json"
+
+
+def export_chord_assignments_json(
+    *,
+    result_payload: dict[str, Any],
+    output_dir: Path,
+) -> Path:
     """
-    Write the pipeline result payload to result.json.
+    Write the structured printed-chord assignment payload to disk.
 
     TODO: Extend the exported schema when real OMR metadata becomes available.
     """
-    result_json_path = output_dir / "result.json"
-    result_json_path.write_text(
+    chord_assignments_path = output_dir / CHORD_ASSIGNMENTS_FILENAME
+    chord_assignments_path.write_text(
         json.dumps(result_payload, indent=2),
         encoding="utf-8",
     )
-    return result_json_path
+    return chord_assignments_path

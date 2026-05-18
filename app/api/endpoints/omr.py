@@ -2,6 +2,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 
 from app.core.config import ALLOWED_EXTENSIONS, BASE_DIR, JOBS_DIR
 from app.schemas.omr import JobStatusResponse, OMRProcessResponse
@@ -14,6 +15,7 @@ from app.services.omr_service import run_omr_pipeline
 
 
 router = APIRouter()
+CHORD_ASSIGNMENTS_FILENAME = "chord_assignments.json"
 
 
 @router.post("/omr/process", response_model=OMRProcessResponse)
@@ -47,7 +49,9 @@ def process_omr(
         job_id=safe_job_id,
         status="completed",
         musicxml_path=pipeline_result.musicxml_path.relative_to(BASE_DIR).as_posix(),
-        result_json_path=pipeline_result.result_json_path.relative_to(BASE_DIR).as_posix(),
+        chord_assignments_path=(
+            pipeline_result.chord_assignments_path.relative_to(BASE_DIR).as_posix()
+        ),
         message="OMR processing completed",
     )
 
@@ -56,12 +60,62 @@ def process_omr(
 def get_job_status(job_id: str) -> JobStatusResponse:
     safe_job_id = validate_job_id(job_id)
     job_dir = JOBS_DIR / safe_job_id
-    result_json_path = job_dir / "output" / "result.json"
+    chord_assignments_path = _find_chord_assignments_path(job_dir)
 
-    if result_json_path.exists():
+    if chord_assignments_path is not None:
         return JobStatusResponse(job_id=safe_job_id, status="completed")
 
     if job_dir.exists():
         return JobStatusResponse(job_id=safe_job_id, status="processing")
 
     return JobStatusResponse(job_id=safe_job_id, status="not_found")
+
+
+@router.get("/omr/jobs/{job_id}/musicxml", response_class=FileResponse)
+def get_job_musicxml(job_id: str) -> FileResponse:
+    """
+    Return the generated MusicXML file for a completed OMR job.
+
+    This is intended for service-to-service retrieval, such as a Spring Boot
+    backend fetching the OMR result before forwarding or storing it.
+    """
+    safe_job_id = validate_job_id(job_id)
+    musicxml_path = JOBS_DIR / safe_job_id / "output" / "score.musicxml"
+
+    if not musicxml_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="MusicXML result not found",
+        )
+
+    return FileResponse(
+        path=musicxml_path,
+        media_type="application/vnd.recordare.musicxml+xml",
+        filename="score.musicxml",
+    )
+
+
+@router.get("/omr/jobs/{job_id}/chord-assignments", response_class=FileResponse)
+def get_job_chord_assignments(job_id: str) -> FileResponse:
+    safe_job_id = validate_job_id(job_id)
+    chord_assignments_path = _find_chord_assignments_path(JOBS_DIR / safe_job_id)
+
+    if chord_assignments_path is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Chord assignments not found",
+        )
+
+    return FileResponse(
+        path=chord_assignments_path,
+        media_type="application/json",
+        filename=CHORD_ASSIGNMENTS_FILENAME,
+    )
+
+
+def _find_chord_assignments_path(job_dir: Path) -> Path | None:
+    canonical_path = job_dir / "output" / CHORD_ASSIGNMENTS_FILENAME
+    if canonical_path.exists():
+        return canonical_path
+
+    return None

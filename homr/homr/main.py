@@ -11,6 +11,11 @@ import numpy as np
 import onnxruntime as ort
 
 from homr import color_adjust, download_utils
+from homr.artifacts import (
+    build_geometry_artifact,
+    write_geometry_json,
+    write_processed_image,
+)
 from homr.autocrop import autocrop
 from homr.bar_line_detection import (
     detect_bar_lines,
@@ -160,10 +165,21 @@ class ProcessingConfig:
     use_gpu_inference: bool
 
 
+@dataclass
+class DetectionArtifacts:
+    multi_staffs: list[MultiStaff]
+    processed_image: NDArray
+    debug: Debug
+    title_future: Future[str]
+    bar_line_boxes: list[RotatedBoundingBox]
+
+
 def process_image(
     image_path: str,
     config: ProcessingConfig,
     xml_generator_args: XmlGeneratorArguments,
+    geometry_json_path: str | None = None,
+    processed_image_path: str | None = None,
 ) -> None:
     eprint("Processing " + image_path)
     xml_file = replace_extension(image_path, ".musicxml")
@@ -179,9 +195,16 @@ def process_image(
             multi_staffs = load_staff_positions(
                 debug, image, staff_position_files, config.selected_staff
             )
-            title = ""
+            title_future: Future[str] = Future()
+            title_future.set_result("")
+            bar_line_boxes: list[RotatedBoundingBox] = []
         else:
-            multi_staffs, image, debug, title_future = detect_staffs_in_image(image_path, config)
+            detection = detect_staffs_in_image(image_path, config)
+            multi_staffs = detection.multi_staffs
+            image = detection.processed_image
+            debug = detection.debug
+            title_future = detection.title_future
+            bar_line_boxes = detection.bar_line_boxes
         debug_cleanup = debug
 
         transformer_config = Config()
@@ -201,6 +224,23 @@ def process_image(
         eprint("Writing XML", result_staffs)
         xml = generate_xml(xml_generator_args, result_staffs, title)
         xml.write(xml_file)
+
+        if geometry_json_path is not None or processed_image_path is not None:
+            geometry_artifact = build_geometry_artifact(
+                processed_image=image,
+                multi_staffs=multi_staffs,
+                bar_line_boxes=bar_line_boxes,
+            )
+            if geometry_json_path is not None:
+                write_geometry_json(
+                    artifact=geometry_artifact,
+                    output_path=geometry_json_path,
+                )
+            if processed_image_path is not None:
+                write_processed_image(
+                    processed_image=image,
+                    output_path=processed_image_path,
+                )
 
         eprint("Finished parsing " + str(len(result_staffs)) + " staves")
         teaser_file = replace_extension(image_path, "_teaser.png")
@@ -222,7 +262,7 @@ def process_image(
 
 def detect_staffs_in_image(
     image_path: str, config: ProcessingConfig
-) -> tuple[list[MultiStaff], NDArray, Debug, Future[str]]:
+) -> DetectionArtifacts:
     predictions, debug = load_and_preprocess_predictions(
         image_path, config.enable_debug, config.enable_cache, config.use_gpu_inference
     )
@@ -284,7 +324,13 @@ def detect_staffs_in_image(
 
     debug.write_all_bounding_boxes_alternating_colors("notes", multi_staffs, notes)
 
-    return multi_staffs, predictions.preprocessed, debug, title_future
+    return DetectionArtifacts(
+        multi_staffs=multi_staffs,
+        processed_image=predictions.preprocessed,
+        debug=debug,
+        title_future=title_future,
+        bar_line_boxes=bar_line_boxes,
+    )
 
 
 def get_all_image_files_in_folder(folder: str) -> list[str]:
@@ -379,6 +425,16 @@ def main() -> None:
         + " of running the built-in staff detection.",
     )
     parser.add_argument(
+        "--geometry-json",
+        type=str,
+        help="Optional path where detected visual score geometry should be written as JSON.",
+    )
+    parser.add_argument(
+        "--processed-image",
+        type=str,
+        help="Optional path where the exact processed image used for geometry detection should be written.",
+    )
+    parser.add_argument(
         "--gpu",
         type=GpuSupport,
         choices=list(GpuSupport),
@@ -424,7 +480,13 @@ def main() -> None:
         sys.exit(1)
     elif os.path.isfile(args.image):
         try:
-            process_image(args.image, config, xml_generator_args)
+            process_image(
+                args.image,
+                config,
+                xml_generator_args,
+                geometry_json_path=args.geometry_json,
+                processed_image_path=args.processed_image,
+            )
         except InvalidProgramArgumentException as e:
             eprint(str(e))
             sys.exit(2)
@@ -435,7 +497,13 @@ def main() -> None:
         for image_file in image_files:
             eprint("=========================================")
             try:
-                process_image(image_file, config, xml_generator_args)
+                process_image(
+                    image_file,
+                    config,
+                    xml_generator_args,
+                    geometry_json_path=args.geometry_json,
+                    processed_image_path=args.processed_image,
+                )
                 eprint("Finished", image_file)
             except Exception as e:
                 eprint(f"An error occurred while processing {image_file}: {e}")

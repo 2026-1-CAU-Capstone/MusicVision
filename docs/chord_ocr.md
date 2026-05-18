@@ -368,3 +368,6 @@ Intentionally deferred:
 
 For a chronological record of the implementation changes and verification
 results, see `docs/chord_ocr_changelog.md`.
+
+For a metrics-focused before/after summary of the Airegin reference run, see
+`docs/chord_ocr_progress_metrics.md`.

@@ -470,3 +470,13 @@ The resulting image shows:
 - `39` assigned chords
 - `2` filtered hits
 - `29` OCR rejects
+
+## Progress-by-the-numbers reference
+
+For the consolidated metric history of the Airegin reference score, including
+the initial `36`-measure / `35-of-43` chord baseline and the current
+`45`-measure / `39-of-43` state, see:
+
+```text
+docs/chord_ocr_progress_metrics.md
+```

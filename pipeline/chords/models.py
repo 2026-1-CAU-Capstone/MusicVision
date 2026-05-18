@@ -44,6 +44,7 @@ class ChordToken:
     text_raw: str
     text_norm: str
     bbox: BBox
+    confidence: float | None = None
 
     @property
     def cx(self) -> float:

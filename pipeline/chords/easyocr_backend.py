@@ -40,19 +40,20 @@ def extract_chord_tokens_ocr(
         raw_text = (text or "").strip()
         if not raw_text:
             continue
+        confidence_value = float(confidence)
 
         xs = [point[0] * inverse_scale for point in points]
         ys = [point[1] * inverse_scale for point in points]
         bbox = (float(min(xs)), float(min(ys)), float(max(xs)), float(max(ys)))
 
-        if confidence < min_confidence:
+        if confidence_value < min_confidence:
             rejects.append(
                 {
                     "text": raw_text,
-                    "bbox": bbox,
-                    "conf": confidence,
+                    "bbox": list(bbox),
+                    "conf": confidence_value,
                     "reason": (
-                        f"confidence {confidence:.2f} < threshold {min_confidence:.2f}"
+                        f"confidence {confidence_value:.2f} < threshold {min_confidence:.2f}"
                     ),
                 }
             )
@@ -65,11 +66,16 @@ def extract_chord_tokens_ocr(
                     text_raw=raw_text,
                     text_norm=normalize_text(corrected),
                     bbox=bbox,
+                    confidence=confidence_value,
                 )
             )
             continue
 
-        split_tokens = try_split_merged_token(raw_text, bbox)
+        split_tokens = try_split_merged_token(
+            raw_text,
+            bbox,
+            confidence=confidence_value,
+        )
         if split_tokens:
             tokens.extend(split_tokens)
             continue
@@ -78,8 +84,8 @@ def extract_chord_tokens_ocr(
             {
                 "text": raw_text,
                 "text_norm": corrected,
-                "bbox": bbox,
-                "conf": confidence,
+                "bbox": list(bbox),
+                "conf": confidence_value,
                 "reason": "failed chord grammar",
             }
         )

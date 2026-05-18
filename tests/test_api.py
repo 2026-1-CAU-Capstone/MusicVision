@@ -20,6 +20,7 @@ def test_health_check(client: TestClient) -> None:
 def test_process_omr_creates_outputs(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     def fake_homr_run(
         command: list[str],
@@ -106,6 +107,16 @@ def test_process_omr_creates_outputs(
     result_payload = client.get("/omr/jobs/demo-job/result")
     assert result_payload.status_code == 200
     assert result_payload.json()["pages"][0]["assignment_source"] == "homr_geometry"
+    assert result_payload.json()["overlay_file"] == "chord_assignment_overlay.png"
+    assert result_payload.json()["chord_ocr"] == {
+        "backend": "easyocr",
+        "accepted_tokens": [],
+        "rejected_hits": [],
+        "filtered_hits": [],
+    }
+    assert (
+        tmp_path / "jobs" / "demo-job" / "output" / "chord_assignment_overlay.png"
+    ).exists()
 
 
 def test_process_omr_rejects_unsupported_extensions(client: TestClient) -> None:

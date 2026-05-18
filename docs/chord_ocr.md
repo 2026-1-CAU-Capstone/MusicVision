@@ -18,6 +18,7 @@ upload
   -> assign chord tokens to measures
       -> prefer HOMR geometry
       -> fall back to CV barline detection only when needed
+  -> render chord_assignment_overlay.png
   -> write enriched result.json
 ```
 
@@ -44,6 +45,7 @@ For each successful job, HOMR now writes:
 | `score.musicxml` | Existing HOMR musical output |
 | `geometry.json` | Visual score geometry for downstream assignment |
 | `homr_processed.png` | Exact processed image used for geometry detection |
+| `chord_assignment_overlay.png` | Diagnostic view of measure assignment and OCR decisions |
 
 `geometry.json` contains:
 
@@ -64,6 +66,7 @@ The image-only first pass lives under `pipeline/chords/`:
 - `grammar.py` normalizes and validates printed chord text
 - `easyocr_backend.py` performs EasyOCR token extraction
 - `ocr_common.py` contains OCR preprocessing helpers
+- `token_filters.py` removes a small set of visually obvious non-chords
 - `measure_assignment.py` performs geometry-first assignment
 - `fallback_barlines.py` preserves the legacy CV detector as a fallback
 
@@ -149,11 +152,101 @@ So the current implementation is best described as a conservative
 The more permissive CV fallback detector in `fallback_barlines.py` remains
 separate and is still used only when HOMR geometry is missing or unusable.
 
+### OCR observability and conservative cleanup
+
+`result.json` now preserves the OCR decision trail under `chord_ocr`:
+
+- `accepted_tokens`
+- `rejected_hits`
+- `filtered_hits`
+
+That distinction matters:
+
+- `rejected_hits` are EasyOCR reads that never passed the grammar/confidence gate
+- `filtered_hits` are grammar-valid reads that were later removed because the
+  visual context strongly suggested they were not chord symbols
+
+#### 1. Circled rehearsal-mark suppression
+
+Single-letter chord names such as `F` are legitimate, so the pipeline does **not**
+ban all one-character tokens. Instead, it only suppresses a single-letter token
+when a surrounding contour looks like a rehearsal-mark circle.
+
+The current rule is applied only to normalized single roots `A` through `G`.
+Inside a padded ROI around that token, a contour is considered circle-like when:
+
+```text
+1.15 <= contour_width  / token_width  <= 3.0
+1.15 <= contour_height / token_height <= 3.0
+0.75 <= contour_aspect_ratio <= 1.35
+```
+
+and the contour bounding box contains the token center.
+
+On Airegin, this removed the circled rehearsal `B` that EasyOCR read as raw text
+`8` and normalized to chord `B`.
+
+#### 2. Single-letter notation touching the staff
+
+The Airegin sample also produced a false positive where a musical glyph inside
+the notation was read as lowercase `e`, then normalized to chord `E`.
+
+For normalized single roots `A` through `G`, the current rule suppresses the
+token when:
+
+```text
+nearest_system_top_y - token_bottom_y <= 6 px
+```
+
+In other words, a one-letter token that touches or nearly touches the staff
+envelope is treated as notation rather than a printed chord label. The rule is
+intentionally limited to single-letter roots so multi-character labels such as
+`C7` or `Fm7` are not affected.
+
+#### 3. OCR text repairs added from observed EasyOCR misreads
+
+The grammar layer now handles a few sample-backed OCR confusions:
+
+| Raw OCR example | Corrected text |
+| --- | --- |
+| `cbmajz` | `Cbmaj7` |
+| `Bbinajz` | `Bbmaj7` |
+| `Bom?` | `Bbm7` |
+| `Fmn?` | `Fm7` |
+| `Gmzbs` | `Gm7b5` |
+
+These are deliberately narrow text repairs rather than general chord inference.
+The pipeline still does not invent a missing `7` when OCR omits it completely.
+
+### Diagnostic overlay
+
+Every completed run now writes:
+
+```text
+chord_assignment_overlay.png
+```
+
+The overlay is drawn directly on `homr_processed.png`, so it uses the same
+processed-image coordinate space as both OCR boxes and HOMR geometry.
+
+Current legend:
+
+| Colour | Meaning |
+| --- | --- |
+| blue | visual measure boxes and measure labels |
+| green | assigned chord tokens, labelled with measure and beat |
+| orange | grammar-valid OCR hits removed by the contextual filters |
+| red | OCR hits rejected before assignment |
+
+This artifact is intentionally diagnostic rather than presentation-oriented. It
+exists to make geometry repairs, OCR cleanup, and assignment mistakes inspectable
+without re-running a debugger.
+
 ## Result payload
 
 `result.json` keeps the existing job-level metadata and now includes structured
-pages, systems, measures, and assigned chords. Each page includes an
-`assignment_source` value:
+pages, systems, measures, assigned chords, and OCR diagnostics. Each page
+includes an `assignment_source` value:
 
 - `homr_geometry`
 - `cv_fallback`
@@ -166,6 +259,13 @@ Example shape:
   "musicxml_file": "score.musicxml",
   "geometry_file": "geometry.json",
   "processed_image_file": "homr_processed.png",
+  "overlay_file": "chord_assignment_overlay.png",
+  "chord_ocr": {
+    "backend": "easyocr",
+    "accepted_tokens": [],
+    "rejected_hits": [],
+    "filtered_hits": []
+  },
   "pages": [
     {
       "page": 1,
@@ -221,11 +321,32 @@ Then inspect:
 storage/jobs/manual-e2e-airegin/output/score.musicxml
 storage/jobs/manual-e2e-airegin/output/geometry.json
 storage/jobs/manual-e2e-airegin/output/homr_processed.png
+storage/jobs/manual-e2e-airegin/output/chord_assignment_overlay.png
 storage/jobs/manual-e2e-airegin/output/result.json
 ```
 
 The first EasyOCR run may take longer if the model weights are not already
 present in the local EasyOCR cache.
+
+## Runtime dependencies
+
+MusicVision now declares `numpy` and `opencv-python-headless` directly in the
+root `requirements.txt` because code under `pipeline/chords/` imports both
+directly.
+
+Important detail:
+
+- the import name is `cv2`
+- the package to install is `opencv-python-headless`
+
+If an editor or shell reports missing `cv2` / `numpy`, first make sure it is
+using this repo's virtual environment, for example:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+and select `.\.venv\Scripts\python.exe` as the interpreter in the editor.
 
 ## Current first-pass scope
 
@@ -242,6 +363,8 @@ Intentionally deferred:
 - TrOCR support
 - HOMR in-process refactor
 - reconstructing original-upload coordinates from processed-image coordinates
+- broad OCR recovery when EasyOCR drops characters entirely, such as a missing
+  trailing `7`
 
 For a chronological record of the implementation changes and verification
 results, see `docs/chord_ocr_changelog.md`.

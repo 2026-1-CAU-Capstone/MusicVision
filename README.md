@@ -14,6 +14,9 @@ uvicorn app.main:app --reload
 The API currently accepts `.png`, `.jpg`, and `.jpeg` inputs. Those files are passed
 through HOMR to generate the returned `.musicxml` output, plus a structured
 `result.json` containing OCR-read printed chord symbols assigned to visual measures.
+Each completed job also writes `chord_assignment_overlay.png`, a diagnostic image
+showing measure assignment and OCR decisions in the HOMR processed-image coordinate
+space.
 PDF upload support should only be reintroduced once the preprocessing stage
 rasterizes PDF pages first.
 

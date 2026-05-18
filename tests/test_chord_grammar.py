@@ -16,3 +16,11 @@ def test_chord_ocr_correction_and_normalization() -> None:
     assert corrected == "G7"
     assert normalize_text("B♭△") == "Bbmaj7"
     assert normalize_text("F♯ø") == "F#m7b5"
+
+
+def test_chord_ocr_correction_handles_observed_easyocr_misreads() -> None:
+    assert looks_like_chord_ocr("cbmajz") == (True, "Cbmaj7")
+    assert looks_like_chord_ocr("Bbinajz") == (True, "Bbmaj7")
+    assert looks_like_chord_ocr("Bom?") == (True, "Bbm7")
+    assert looks_like_chord_ocr("Fmn?") == (True, "Fm7")
+    assert looks_like_chord_ocr("Gmzbs") == (True, "Gm7b5")

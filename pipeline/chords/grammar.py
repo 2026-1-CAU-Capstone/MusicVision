@@ -44,11 +44,20 @@ _BODY_FIXES: dict[str, str] = {
     "'": "7",
     "h": "b",
     "q": "b",
-    "n": "b",
     "f": "#",
-    "s": "b",
     "a": "△",
     "A": "△",
+    "c": "#",
+    "z": "7",
+    "Z": "7",
+}
+
+_ROOT_ACCIDENTAL_FIXES: dict[str, str] = {
+    "h": "b",
+    "q": "b",
+    "n": "b",
+    "o": "b",
+    "f": "#",
     "c": "#",
 }
 
@@ -59,6 +68,7 @@ def _ocr_correct(text: str) -> str:
 
     text = re.sub(r"\s*/\s*", "/", text)
     text = text.rstrip(".,;:!|")
+    text = re.sub(r"inaj", "maj", text, flags=re.IGNORECASE)
     chars = list(text)
 
     if chars[0].isalpha():
@@ -66,6 +76,9 @@ def _ocr_correct(text: str) -> str:
 
     root_end = 1
     if len(chars) > 1 and chars[1] in ("#", "b", "♭", "♯"):
+        root_end = 2
+    elif len(chars) > 1 and chars[1] in _ROOT_ACCIDENTAL_FIXES:
+        chars[1] = _ROOT_ACCIDENTAL_FIXES[chars[1]]
         root_end = 2
 
     if chars[0] in _ROOT_FIXES:
@@ -75,10 +88,13 @@ def _ocr_correct(text: str) -> str:
         char = chars[index]
         if char in ("a", "A") and index == len(chars) - 1:
             chars[index] = "△"
+        elif char in ("s", "S") and index > root_end and chars[index - 1] == "b":
+            chars[index] = "5"
         elif char in _BODY_FIXES and char not in ("a", "A"):
             chars[index] = _BODY_FIXES[char]
 
     result = "".join(chars)
+    result = re.sub(r"mn7$", "m7", result)
     slash_match = re.search(r"/([a-gA-G0-9])", result)
     if slash_match:
         bass_char = slash_match.group(1)

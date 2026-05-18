@@ -218,7 +218,255 @@ The new `958.5` boundary is the recovered visual separator.
 
 The remaining work is OCR-quality work rather than geometry work:
 
-1. preserve accepted and rejected OCR hits for debugging
-2. suppress rehearsal marks such as circled `A` / `B`
-3. improve recall for missed chord symbols
-4. later, tune cases where OCR drops a `7`
+1. improve cases where EasyOCR drops a character entirely, especially a trailing `7`
+2. continue evaluating the heuristics on more scores before widening them
+
+## 2026-05-18 - OCR diagnostics and conservative cleanup
+
+### Problem
+
+The real Airegin integration run made two things hard to reason about:
+
+1. the service discarded EasyOCR rejects after extraction, so it was difficult to
+   distinguish "not read" from "read but rejected"
+2. two observed false positives survived the chord grammar:
+   - lowercase `e` from notation near the staff
+   - circled rehearsal `B`, read by EasyOCR as raw text `8`
+
+The same run also exposed several high-confidence OCR reads that were very close
+to valid chord labels but failed normalization:
+
+- `cbmajz`
+- `Bbinajz`
+- `Bom?`
+- `Fmn?`
+- `Gmzbs`
+
+### Fix
+
+#### Persist the OCR decision trail
+
+Extended `result.json` with:
+
+```json
+"chord_ocr": {
+  "backend": "easyocr",
+  "accepted_tokens": [],
+  "rejected_hits": [],
+  "filtered_hits": []
+}
+```
+
+`rejected_hits` now keep JSON-safe confidence values and bounding boxes. Tokens
+retain their EasyOCR confidence so accepted and filtered tokens can be audited
+after the run.
+
+#### Suppress circled rehearsal marks without banning real single-letter chords
+
+Added `pipeline/chords/token_filters.py`.
+
+For normalized single-letter roots `A` through `G`, a token is filtered as
+`circled_rehearsal_mark` only when a surrounding contour:
+
+```text
+contains the token center
+1.15 <= contour_width  / token_width  <= 3.0
+1.15 <= contour_height / token_height <= 3.0
+0.75 <= contour_aspect_ratio <= 1.35
+```
+
+Observed Airegin example:
+
+```text
+raw token:            8
+normalized token:     B
+contour bbox:         [1045.0, 911.0, 1092.0, 957.0]
+width ratio:          1.567
+height ratio:         1.438
+aspect ratio:         1.022
+```
+
+The key design choice is that a plain `F` remains legal. The filter requires
+visual evidence of the enclosing ring before removing a single-letter token.
+
+#### Suppress one-letter notation that touches the staff envelope
+
+For normalized single-letter roots `A` through `G`, a token is filtered as
+`single_letter_touches_staff` when:
+
+```text
+nearest_system_top_y - token_bottom_y <= 6 px
+```
+
+Observed Airegin example:
+
+```text
+raw token:                         e
+normalized token:                  E
+nearest system index:              2
+token_bottom_to_staff_top_px:     -0.321
+threshold_px:                      6.0
+```
+
+This removed the notation false positive while leaving the actual printed
+single-letter `F` chord labels intact because they remained visibly above the
+staff envelope.
+
+#### Add narrow, sample-backed OCR text repairs
+
+Extended grammar normalization to cover:
+
+| Raw OCR | Corrected |
+| --- | --- |
+| `z` in chord body | `7` |
+| `inaj` | `maj` |
+| root-position `o` | `b` |
+| trailing `mn7` | `m7` |
+| `bs` after a chord body | `b5` |
+
+Observed corrections:
+
+| Raw OCR | Before | After |
+| --- | --- | --- |
+| `cbmajz` | rejected | `Cbmaj7` |
+| `Bbinajz` | rejected | `Bbmaj7` |
+| `Bom?` | rejected | `Bbm7` |
+| `Fmn?` | `Fmb7` | `Fm7` |
+| `Gmzbs` | rejected | `Gm7b5` |
+
+These are OCR spelling repairs only; they still do not infer chords from notes
+or hallucinate a suffix that OCR omitted entirely.
+
+#### Declare direct runtime dependencies
+
+Added direct root requirements for:
+
+- `numpy>=2.4.2,<3.0`
+- `opencv-python-headless>=4.13.0.92,<5.0`
+
+MusicVision imports both directly under `pipeline/chords/`, so relying on HOMR
+or EasyOCR to bring them in transitively made local environments too fragile.
+
+### Verification
+
+Added deterministic tests for:
+
+- the new OCR normalization cases
+- circled rehearsal-mark filtering
+- staff-touch filtering
+- serialized OCR diagnostics in API output
+
+Ran a fresh real HOMR + EasyOCR job on:
+
+```text
+resources/airegin-miles_davis.png
+```
+
+New output job:
+
+```text
+storage/jobs/manual-e2e-airegin-ocr-pass/output/result.json
+```
+
+Observed result:
+
+| Metric | Before OCR cleanup | After OCR cleanup |
+| --- | ---: | ---: |
+| assigned OCR tokens | `37` | `39` |
+| obvious false positives retained | `2` | `0` |
+| filtered hits recorded | `0` | `2` |
+| rejected hits recorded | discarded | `29` |
+
+Filtered hits in the real run:
+
+```text
+e -> E    single_letter_touches_staff
+8 -> B    circled_rehearsal_mark
+```
+
+Newly recovered or corrected labels in the real run included:
+
+```text
+Cbmaj7
+Bbmaj7
+Bbm7
+Gm7b5
+```
+
+Against the manually observed `43` printed chords in the Airegin example, this
+brings the current image-based first pass to `39 / 43` assigned chord tokens,
+with the known rehearsal-mark false positive removed.
+
+## 2026-05-18 - First-class assignment overlay artifact
+
+### Problem
+
+The geometry investigation had already used manually generated
+`chord_assignment_overlay.png` files, but the production pipeline did not create
+one. That meant the most useful debugging view disappeared on fresh OCR runs even
+though the structured data needed to render it was already available.
+
+### Fix
+
+Added `pipeline/chords/overlay.py` and made every normal pipeline run write:
+
+```text
+chord_assignment_overlay.png
+```
+
+The overlay is rendered from:
+
+- `homr_processed.png`
+- structured measure assignment output
+- persisted OCR diagnostics
+
+It therefore stays in the same `homr_processed_image` coordinate space as the
+rest of the feature branch.
+
+### Overlay legend
+
+| Colour | Meaning |
+| --- | --- |
+| blue | measure boxes and measure labels |
+| green | assigned chord tokens, labelled as `m{measure} b{beat}` |
+| orange | filtered grammar-valid hits such as rehearsal marks |
+| red | OCR rejects that never reached assignment |
+
+The legend also reports:
+
+- measure count
+- assigned-chord count
+- filtered-hit count
+- rejected-hit count
+- assignment source
+
+### Result schema change
+
+`result.json` now records:
+
+```json
+"overlay_file": "chord_assignment_overlay.png"
+```
+
+so downstream code can discover the artifact without hard-coding its filename.
+
+### Verification
+
+Added deterministic tests for:
+
+- overlay colour rendering on synthetic geometry/OCR data
+- writing the PNG artifact
+- production pipeline creation of the overlay during API processing
+
+Generated the overlay retroactively for the existing real OCR sample run:
+
+```text
+storage/jobs/manual-e2e-airegin-ocr-pass/output/chord_assignment_overlay.png
+```
+
+The resulting image shows:
+
+- `45` measures
+- `39` assigned chords
+- `2` filtered hits
+- `29` OCR rejects

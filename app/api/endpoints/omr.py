@@ -1,7 +1,17 @@
+import logging
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import FileResponse
 
 from app.core.config import ALLOWED_EXTENSIONS, BASE_DIR, JOBS_DIR
@@ -16,9 +26,47 @@ from app.services.omr_service import run_omr_pipeline
 
 router = APIRouter()
 CHORD_ASSIGNMENTS_FILENAME = "chord_assignments.json"
+logger = logging.getLogger("musicvision.omr")
 
 
-@router.post("/omr/process", response_model=OMRProcessResponse)
+async def log_process_request(request: Request) -> None:
+    content_type = request.headers.get("content-type")
+    content_length = request.headers.get("content-length")
+
+    try:
+        form = await request.form()
+        fields = [_describe_form_item(key, value) for key, value in form.multi_items()]
+    except Exception:
+        logger.exception(
+            "Could not inspect incoming OMR request form: content_type=%r content_length=%r",
+            content_type,
+            content_length,
+        )
+        return
+
+    logger.info(
+        "Incoming OMR request: content_type=%r content_length=%r fields=%s",
+        content_type,
+        content_length,
+        fields,
+    )
+
+
+def _describe_form_item(key: str, value: object) -> str:
+    filename = getattr(value, "filename", None)
+    content_type = getattr(value, "content_type", None)
+
+    if filename is not None:
+        return f"{key}=file(filename={filename!r}, content_type={content_type!r})"
+
+    return f"{key}={type(value).__name__}"
+
+
+@router.post(
+    "/omr/process",
+    response_model=OMRProcessResponse,
+    dependencies=[Depends(log_process_request)],
+)
 def process_omr(
     file: UploadFile = File(...),
     job_id: str | None = Form(default=None),
@@ -27,6 +75,13 @@ def process_omr(
     safe_job_id = validate_job_id(requested_job_id)
 
     original_filename = file.filename or ""
+    logger.info(
+        "Parsed OMR upload: job_id=%s filename=%r content_type=%r",
+        safe_job_id,
+        original_filename,
+        file.content_type,
+    )
+
     file_suffix = Path(original_filename).suffix.lower()
     if file_suffix not in ALLOWED_EXTENSIONS:
         allowed = ", ".join(sorted(ALLOWED_EXTENSIONS))
@@ -37,6 +92,12 @@ def process_omr(
 
     job_paths = create_job_directories(safe_job_id)
     input_file_path = save_upload_file(file, job_paths.input_dir)
+    logger.info(
+        "Saved OMR upload: job_id=%s path=%s bytes=%s",
+        safe_job_id,
+        input_file_path,
+        input_file_path.stat().st_size,
+    )
     pipeline_result = run_omr_pipeline(
         job_id=safe_job_id,
         input_file_path=input_file_path,

@@ -19,7 +19,7 @@ upload
       -> prefer HOMR geometry
       -> fall back to CV barline detection only when needed
   -> render chord_assignment_overlay.png
-  -> write enriched result.json
+  -> write enriched chord_assignments.json
 ```
 
 The HOMR subprocess boundary is intentionally preserved in this first pass.
@@ -154,7 +154,7 @@ separate and is still used only when HOMR geometry is missing or unusable.
 
 ### OCR observability and conservative cleanup
 
-`result.json` now preserves the OCR decision trail under `chord_ocr`:
+`chord_assignments.json` now preserves the OCR decision trail under `chord_ocr`:
 
 - `accepted_tokens`
 - `rejected_hits`
@@ -242,11 +242,11 @@ This artifact is intentionally diagnostic rather than presentation-oriented. It
 exists to make geometry repairs, OCR cleanup, and assignment mistakes inspectable
 without re-running a debugger.
 
-## Result payload
+## Chord-assignment payload
 
-`result.json` keeps the existing job-level metadata and now includes structured
-pages, systems, measures, assigned chords, and OCR diagnostics. Each page
-includes an `assignment_source` value:
+`chord_assignments.json` keeps the job-level metadata and includes structured
+pages, systems, measures, assigned chords, OCR diagnostics, and an explicit
+MusicXML-alignment summary. Each page includes an `assignment_source` value:
 
 - `homr_geometry`
 - `cv_fallback`
@@ -260,6 +260,11 @@ Example shape:
   "geometry_file": "geometry.json",
   "processed_image_file": "homr_processed.png",
   "overlay_file": "chord_assignment_overlay.png",
+  "measure_alignment": {
+    "status": "aligned",
+    "musicxml_measure_count": 45,
+    "visual_measure_count": 45
+  },
   "chord_ocr": {
     "backend": "easyocr",
     "accepted_tokens": [],
@@ -276,6 +281,7 @@ Example shape:
           "measures": [
             {
               "index": 1,
+              "musicxml_measure_number": "1",
               "chords": [
                 {
                   "text_raw": "Dm7",
@@ -292,6 +298,38 @@ Example shape:
 }
 ```
 
+### Measure alignment with MusicXML
+
+After HOMR produces `score.musicxml`, the pipeline reads the MusicXML measure
+sequence and compares it with the visual measure sequence used for chord
+assignment.
+
+If the counts match, the payload reports:
+
+```json
+"measure_alignment": {
+  "status": "aligned",
+  "musicxml_measure_count": 45,
+  "visual_measure_count": 45
+}
+```
+
+and each visual measure receives its corresponding
+`musicxml_measure_number`.
+
+If the counts do **not** match, the payload reports:
+
+```json
+"measure_alignment": {
+  "status": "mismatch",
+  "musicxml_measure_count": 45,
+  "visual_measure_count": 44
+}
+```
+
+and the pipeline intentionally does **not** guess a one-to-one mapping. That
+keeps downstream consumers from silently combining incompatible sequences.
+
 ## API surface
 
 Existing MusicXML retrieval remains unchanged:
@@ -300,7 +338,13 @@ Existing MusicXML retrieval remains unchanged:
 GET /omr/jobs/{job_id}/musicxml
 ```
 
-Structured result retrieval is now available at:
+Structured chord-assignment retrieval is now available at:
+
+```text
+GET /omr/jobs/{job_id}/chord-assignments
+```
+
+The previous generic route remains available as a compatibility alias:
 
 ```text
 GET /omr/jobs/{job_id}/result
@@ -322,7 +366,7 @@ storage/jobs/manual-e2e-airegin/output/score.musicxml
 storage/jobs/manual-e2e-airegin/output/geometry.json
 storage/jobs/manual-e2e-airegin/output/homr_processed.png
 storage/jobs/manual-e2e-airegin/output/chord_assignment_overlay.png
-storage/jobs/manual-e2e-airegin/output/result.json
+storage/jobs/manual-e2e-airegin/output/chord_assignments.json
 ```
 
 The first EasyOCR run may take longer if the model weights are not already

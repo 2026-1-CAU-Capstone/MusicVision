@@ -7,7 +7,7 @@ class OMRProcessResponse(BaseModel):
     job_id: str
     status: Literal["completed"]
     musicxml_path: str
-    result_json_path: str
+    chord_assignments_path: str
     message: str
 
 

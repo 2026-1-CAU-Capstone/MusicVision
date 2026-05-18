@@ -32,7 +32,16 @@ def test_process_omr_creates_outputs(
         env: dict[str, str],
     ) -> subprocess.CompletedProcess[str]:
         input_path = Path(command[-1])
-        input_path.with_suffix(".musicxml").write_text("<score-partwise/>", encoding="utf-8")
+        input_path.with_suffix(".musicxml").write_text(
+            """
+            <score-partwise>
+              <part id="P1">
+                <measure number="1"/>
+              </part>
+            </score-partwise>
+            """,
+            encoding="utf-8",
+        )
         geometry_path = Path(command[4])
         processed_image_path = Path(command[6])
         geometry_path.write_text(
@@ -78,8 +87,19 @@ def test_process_omr_creates_outputs(
                     "page": 1,
                     "width": 200.0,
                     "height": 100.0,
-                    "assignment_source": "homr_geometry",
-                    "systems": [],
+                        "assignment_source": "homr_geometry",
+                        "systems": [
+                            {
+                                "index": 1,
+                                "measures": [
+                                    {
+                                        "index": 1,
+                                        "bbox": [10.0, 20.0, 190.0, 80.0],
+                                        "chords": [],
+                                    }
+                                ],
+                            }
+                        ],
                 }
             ],
         },
@@ -96,7 +116,7 @@ def test_process_omr_creates_outputs(
         "job_id": "demo-job",
         "status": "completed",
         "musicxml_path": "jobs/demo-job/output/score.musicxml",
-        "result_json_path": "jobs/demo-job/output/result.json",
+        "chord_assignments_path": "jobs/demo-job/output/chord_assignments.json",
         "message": "OMR processing completed",
     }
 
@@ -104,16 +124,30 @@ def test_process_omr_creates_outputs(
     assert completed.status_code == 200
     assert completed.json() == {"job_id": "demo-job", "status": "completed"}
 
-    result_payload = client.get("/omr/jobs/demo-job/result")
-    assert result_payload.status_code == 200
-    assert result_payload.json()["pages"][0]["assignment_source"] == "homr_geometry"
-    assert result_payload.json()["overlay_file"] == "chord_assignment_overlay.png"
-    assert result_payload.json()["chord_ocr"] == {
+    chord_assignments_payload = client.get("/omr/jobs/demo-job/chord-assignments")
+    assert chord_assignments_payload.status_code == 200
+    assert (
+        chord_assignments_payload.json()["pages"][0]["assignment_source"]
+        == "homr_geometry"
+    )
+    assert chord_assignments_payload.json()["overlay_file"] == "chord_assignment_overlay.png"
+    assert chord_assignments_payload.json()["measure_alignment"] == {
+        "status": "aligned",
+        "musicxml_measure_count": 1,
+        "visual_measure_count": 1,
+    }
+    assert chord_assignments_payload.json()["pages"][0]["systems"][0]["measures"][0][
+        "musicxml_measure_number"
+    ] == "1"
+    assert chord_assignments_payload.json()["chord_ocr"] == {
         "backend": "easyocr",
         "accepted_tokens": [],
         "rejected_hits": [],
         "filtered_hits": [],
     }
+    legacy_alias_payload = client.get("/omr/jobs/demo-job/result")
+    assert legacy_alias_payload.status_code == 200
+    assert legacy_alias_payload.json() == chord_assignments_payload.json()
     assert (
         tmp_path / "jobs" / "demo-job" / "output" / "chord_assignment_overlay.png"
     ).exists()
@@ -164,21 +198,44 @@ def test_get_job_musicxml_returns_404_when_missing(client: TestClient) -> None:
     assert response.json() == {"detail": "MusicXML result not found"}
 
 
-def test_get_job_result_returns_file(client: TestClient, tmp_path: Path) -> None:
-    result_path = tmp_path / "jobs" / "ready-job" / "output" / "result.json"
-    result_path.parent.mkdir(parents=True)
-    result_path.write_text('{"job_id":"ready-job"}', encoding="utf-8")
+def test_get_job_chord_assignments_returns_file(client: TestClient, tmp_path: Path) -> None:
+    assignments_path = (
+        tmp_path / "jobs" / "ready-job" / "output" / "chord_assignments.json"
+    )
+    assignments_path.parent.mkdir(parents=True)
+    assignments_path.write_text('{"job_id":"ready-job"}', encoding="utf-8")
 
-    response = client.get("/omr/jobs/ready-job/result")
+    response = client.get("/omr/jobs/ready-job/chord-assignments")
 
     assert response.status_code == 200
     assert response.json() == {"job_id": "ready-job"}
     assert response.headers["content-type"] == "application/json"
-    assert response.headers["content-disposition"] == 'attachment; filename="result.json"'
+    assert (
+        response.headers["content-disposition"]
+        == 'attachment; filename="chord_assignments.json"'
+    )
 
 
-def test_get_job_result_returns_404_when_missing(client: TestClient) -> None:
-    response = client.get("/omr/jobs/missing-job/result")
+def test_get_job_chord_assignments_returns_404_when_missing(client: TestClient) -> None:
+    response = client.get("/omr/jobs/missing-job/chord-assignments")
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "Structured result not found"}
+    assert response.json() == {"detail": "Chord assignments not found"}
+
+
+def test_get_job_result_alias_reads_legacy_result_file(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    legacy_result_path = tmp_path / "jobs" / "legacy-job" / "output" / "result.json"
+    legacy_result_path.parent.mkdir(parents=True)
+    legacy_result_path.write_text('{"job_id":"legacy-job"}', encoding="utf-8")
+
+    response = client.get("/omr/jobs/legacy-job/result")
+
+    assert response.status_code == 200
+    assert response.json() == {"job_id": "legacy-job"}
+    assert (
+        response.headers["content-disposition"]
+        == 'attachment; filename="chord_assignments.json"'
+    )

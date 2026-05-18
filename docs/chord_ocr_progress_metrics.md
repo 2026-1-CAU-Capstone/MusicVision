@@ -202,7 +202,7 @@ The branch also improved what can be measured after a run.
 | --- | --- | --- |
 | `geometry.json` | present | present |
 | `homr_processed.png` | present | present |
-| structured OCR diagnostics in `result.json` | absent | present |
+| structured OCR diagnostics in the chord-assignment payload | absent | present |
 | `chord_assignment_overlay.png` | manual only | generated automatically |
 | accepted / rejected / filtered OCR counts | not persisted | persisted |
 
@@ -218,6 +218,15 @@ The current real sample overlay reports:
 This matters because future OCR work no longer has to be judged from visual
 inspection alone; there is now a saved trail for what the OCR saw, what the
 grammar rejected, what the filters removed, and what was finally assigned.
+
+The current canonical structured artifact is:
+
+```text
+chord_assignments.json
+```
+
+The historical milestone runs listed below were captured earlier in the branch
+and therefore still use the former `result.json` filename.
 
 ## What has not yet improved enough
 
@@ -242,4 +251,3 @@ storage/jobs/manual-e2e-airegin-leading-fix/output/result.json
 storage/jobs/manual-e2e-airegin-barline-fix/output/result.json
 storage/jobs/manual-e2e-airegin-ocr-pass/output/result.json
 ```
-

@@ -471,6 +471,85 @@ The resulting image shows:
 - `2` filtered hits
 - `29` OCR rejects
 
+## 2026-05-18 - Canonical chord-assignment contract
+
+### Problem
+
+The generic `result.json` / `/result` naming no longer described the payload
+well, and downstream use depends on the structured chord assignments lining up
+with `score.musicxml` by measure.
+
+### Fix
+
+New jobs now write:
+
+```text
+chord_assignments.json
+```
+
+and expose the canonical endpoint:
+
+```text
+GET /omr/jobs/{job_id}/chord-assignments
+```
+
+The process response now returns:
+
+```json
+"chord_assignments_path": "jobs/{job_id}/output/chord_assignments.json"
+```
+
+For compatibility with earlier branch artifacts and callers:
+
+- `GET /omr/jobs/{job_id}/result` remains as an alias
+- retrieval can still read older saved `result.json` files when a canonical file
+  does not yet exist
+
+### Measure-alignment metadata
+
+Added an explicit alignment check against `score.musicxml`.
+
+When the MusicXML and visual sequences have the same measure count, the payload
+contains:
+
+```json
+"measure_alignment": {
+  "status": "aligned",
+  "musicxml_measure_count": 45,
+  "visual_measure_count": 45
+}
+```
+
+and each visual measure receives:
+
+```json
+"musicxml_measure_number": "17"
+```
+
+If the counts diverge, the payload reports `"status": "mismatch"` and does not
+invent a correspondence.
+
+### Why this matters
+
+On the Airegin sample:
+
+| Output | Initial state | Current state |
+| --- | ---: | ---: |
+| MusicXML measure count | `45` | `45` |
+| structured visual measure count | `36` | `45` |
+
+The earlier geometry work fixed the actual mismatch; this cleanup makes that
+alignment an explicit, machine-readable contract.
+
+### Verification
+
+Added deterministic tests for:
+
+- aligned MusicXML/visual measure sequences
+- mismatched sequences that must not receive guessed measure numbers
+- canonical `/chord-assignments` retrieval
+- backward-compatible `/result` retrieval from legacy files
+
 ## Progress-by-the-numbers reference
 
 For the consolidated metric history of the Airegin reference score, including

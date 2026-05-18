@@ -13,7 +13,8 @@ uvicorn app.main:app --reload
 
 The API currently accepts `.png`, `.jpg`, and `.jpeg` inputs. Those files are passed
 through HOMR to generate the returned `.musicxml` output, plus a structured
-`result.json` containing OCR-read printed chord symbols assigned to visual measures.
+`chord_assignments.json` containing OCR-read printed chord symbols assigned to
+visual measures.
 Each completed job also writes `chord_assignment_overlay.png`, a diagnostic image
 showing measure assignment and OCR decisions in the HOMR processed-image coordinate
 space.
@@ -26,17 +27,27 @@ After processing a job, retrieve the generated MusicXML bytes with:
 GET /omr/jobs/{job_id}/musicxml
 ```
 
-Retrieve the structured JSON result with:
+Retrieve the structured chord-assignment JSON with:
 
 ```text
-GET /omr/jobs/{job_id}/result
+GET /omr/jobs/{job_id}/chord-assignments
 ```
+
+`GET /omr/jobs/{job_id}/result` remains available as a backward-compatible alias
+for older callers.
 
 The printed chord-symbol OCR architecture, artifact contract, and coordinate-space
 rules are documented in:
 
 ```text
 docs/chord_ocr.md
+```
+
+Consumer-facing API integration docs for the Spring Boot backend and frontend are
+in:
+
+```text
+docs/api/
 ```
 
 Open the API docs at:

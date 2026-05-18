@@ -11,6 +11,7 @@ def postprocess_omr_output(
     chord_result: dict[str, Any],
     ocr_diagnostics: dict[str, Any],
     overlay_path: Path,
+    measure_alignment: dict[str, Any],
 ) -> dict[str, Any]:
     """
     Build a minimal structured payload from HOMR output.
@@ -27,6 +28,7 @@ def postprocess_omr_output(
         "pipeline": "homr",
         "time_signature": chord_result["time_signature"],
         "beats_per_bar": chord_result["beats_per_bar"],
+        "measure_alignment": measure_alignment,
         "chord_ocr": ocr_diagnostics,
         "pages": chord_result["pages"],
     }

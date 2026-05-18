@@ -344,12 +344,6 @@ Structured chord-assignment retrieval is now available at:
 GET /omr/jobs/{job_id}/chord-assignments
 ```
 
-The previous generic route remains available as a compatibility alias:
-
-```text
-GET /omr/jobs/{job_id}/result
-```
-
 ## Manual verification
 
 For a real local smoke test, run the service and post a bundled sample image:

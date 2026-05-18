@@ -145,9 +145,6 @@ def test_process_omr_creates_outputs(
         "rejected_hits": [],
         "filtered_hits": [],
     }
-    legacy_alias_payload = client.get("/omr/jobs/demo-job/result")
-    assert legacy_alias_payload.status_code == 200
-    assert legacy_alias_payload.json() == chord_assignments_payload.json()
     assert (
         tmp_path / "jobs" / "demo-job" / "output" / "chord_assignment_overlay.png"
     ).exists()
@@ -221,21 +218,3 @@ def test_get_job_chord_assignments_returns_404_when_missing(client: TestClient) 
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Chord assignments not found"}
-
-
-def test_get_job_result_alias_reads_legacy_result_file(
-    client: TestClient,
-    tmp_path: Path,
-) -> None:
-    legacy_result_path = tmp_path / "jobs" / "legacy-job" / "output" / "result.json"
-    legacy_result_path.parent.mkdir(parents=True)
-    legacy_result_path.write_text('{"job_id":"legacy-job"}', encoding="utf-8")
-
-    response = client.get("/omr/jobs/legacy-job/result")
-
-    assert response.status_code == 200
-    assert response.json() == {"job_id": "legacy-job"}
-    assert (
-        response.headers["content-disposition"]
-        == 'attachment; filename="chord_assignments.json"'
-    )

@@ -191,17 +191,3 @@ Example unsupported-file response:
 }
 ```
 
-## 7. Compatibility note
-
-The old route still exists:
-
-```text
-GET /omr/jobs/{job_id}/result
-```
-
-but new Spring Boot code should use:
-
-```text
-GET /omr/jobs/{job_id}/chord-assignments
-```
-

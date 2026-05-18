@@ -33,9 +33,6 @@ Retrieve the structured chord-assignment JSON with:
 GET /omr/jobs/{job_id}/chord-assignments
 ```
 
-`GET /omr/jobs/{job_id}/result` remains available as a backward-compatible alias
-for older callers.
-
 The printed chord-symbol OCR architecture, artifact contract, and coordinate-space
 rules are documented in:
 

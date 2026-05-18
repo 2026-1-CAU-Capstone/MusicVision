@@ -16,7 +16,6 @@ from app.services.omr_service import run_omr_pipeline
 
 router = APIRouter()
 CHORD_ASSIGNMENTS_FILENAME = "chord_assignments.json"
-LEGACY_RESULT_FILENAME = "result.json"
 
 
 @router.post("/omr/process", response_model=OMRProcessResponse)
@@ -114,37 +113,9 @@ def get_job_chord_assignments(job_id: str) -> FileResponse:
     )
 
 
-@router.get("/omr/jobs/{job_id}/result", response_class=FileResponse)
-def get_job_result(job_id: str) -> FileResponse:
-    """
-    Backward-compatible alias for the former generic structured-result route.
-
-    New callers should prefer `/chord-assignments`.
-    """
-    safe_job_id = validate_job_id(job_id)
-    chord_assignments_path = _find_chord_assignments_path(JOBS_DIR / safe_job_id)
-
-    if chord_assignments_path is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Structured result not found",
-        )
-
-    return FileResponse(
-        path=chord_assignments_path,
-        media_type="application/json",
-        filename=CHORD_ASSIGNMENTS_FILENAME,
-    )
-
-
 def _find_chord_assignments_path(job_dir: Path) -> Path | None:
-    output_dir = job_dir / "output"
-    canonical_path = output_dir / CHORD_ASSIGNMENTS_FILENAME
+    canonical_path = job_dir / "output" / CHORD_ASSIGNMENTS_FILENAME
     if canonical_path.exists():
         return canonical_path
-
-    legacy_path = output_dir / LEGACY_RESULT_FILENAME
-    if legacy_path.exists():
-        return legacy_path
 
     return None

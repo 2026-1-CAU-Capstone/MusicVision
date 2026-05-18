@@ -49,7 +49,3 @@ GET  /omr/jobs/{job_id}
 GET  /omr/jobs/{job_id}/musicxml
 GET  /omr/jobs/{job_id}/chord-assignments
 ```
-
-`GET /omr/jobs/{job_id}/result` still exists as a backward-compatible alias for
-older callers, but new integration code should use `/chord-assignments`.
-

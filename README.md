@@ -12,13 +12,28 @@ uvicorn app.main:app --reload
 ```
 
 The API currently accepts `.png`, `.jpg`, and `.jpeg` inputs. Those files are passed
-through HOMR to generate the returned `.musicxml` output. PDF upload support should
-only be reintroduced once the preprocessing stage rasterizes PDF pages first.
+through HOMR to generate the returned `.musicxml` output, plus a structured
+`result.json` containing OCR-read printed chord symbols assigned to visual measures.
+PDF upload support should only be reintroduced once the preprocessing stage
+rasterizes PDF pages first.
 
 After processing a job, retrieve the generated MusicXML bytes with:
 
 ```text
 GET /omr/jobs/{job_id}/musicxml
+```
+
+Retrieve the structured JSON result with:
+
+```text
+GET /omr/jobs/{job_id}/result
+```
+
+The printed chord-symbol OCR architecture, artifact contract, and coordinate-space
+rules are documented in:
+
+```text
+docs/chord_ocr.md
 ```
 
 Open the API docs at:

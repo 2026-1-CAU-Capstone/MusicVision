@@ -1,8 +1,9 @@
 import json
 from pathlib import Path
+from typing import Any
 
 
-def export_result_json(*, result_payload: dict[str, str], output_dir: Path) -> Path:
+def export_result_json(*, result_payload: dict[str, Any], output_dir: Path) -> Path:
     """
     Write the pipeline result payload to result.json.
 

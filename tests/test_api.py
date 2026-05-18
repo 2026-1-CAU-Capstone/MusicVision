@@ -3,9 +3,11 @@ from pathlib import Path
 import subprocess
 
 from fastapi.testclient import TestClient
+import numpy as np
 import pytest
 
 import pipeline.run_homr as run_homr_module
+import app.services.omr_service as omr_service
 
 
 def test_health_check(client: TestClient) -> None:
@@ -30,6 +32,20 @@ def test_process_omr_creates_outputs(
     ) -> subprocess.CompletedProcess[str]:
         input_path = Path(command[-1])
         input_path.with_suffix(".musicxml").write_text("<score-partwise/>", encoding="utf-8")
+        geometry_path = Path(command[4])
+        processed_image_path = Path(command[6])
+        geometry_path.write_text(
+            """
+            {
+              "coordinate_space": "homr_processed_image",
+              "image": {"width": 200, "height": 100},
+              "systems": [],
+              "barlines": []
+            }
+            """,
+            encoding="utf-8",
+        )
+        processed_image_path.write_bytes(b"fake-image")
         assert env["PYTHONUTF8"] == "1"
         return subprocess.CompletedProcess(
             command,
@@ -39,6 +55,34 @@ def test_process_omr_creates_outputs(
         )
 
     monkeypatch.setattr(run_homr_module.subprocess, "run", fake_homr_run)
+    monkeypatch.setattr(
+        omr_service,
+        "load_rgb_image",
+        lambda _path: np.zeros((100, 200, 3), dtype=np.uint8),
+    )
+    monkeypatch.setattr(
+        omr_service,
+        "extract_chord_tokens_ocr",
+        lambda _image: ([], []),
+    )
+    monkeypatch.setattr(
+        omr_service,
+        "assign_chords_to_measures",
+        lambda **_kwargs: {
+            "source": "homr_processed.png",
+            "time_signature": "4/4",
+            "beats_per_bar": 4,
+            "pages": [
+                {
+                    "page": 1,
+                    "width": 200.0,
+                    "height": 100.0,
+                    "assignment_source": "homr_geometry",
+                    "systems": [],
+                }
+            ],
+        },
+    )
 
     response = client.post(
         "/omr/process",
@@ -58,6 +102,10 @@ def test_process_omr_creates_outputs(
     completed = client.get("/omr/jobs/demo-job")
     assert completed.status_code == 200
     assert completed.json() == {"job_id": "demo-job", "status": "completed"}
+
+    result_payload = client.get("/omr/jobs/demo-job/result")
+    assert result_payload.status_code == 200
+    assert result_payload.json()["pages"][0]["assignment_source"] == "homr_geometry"
 
 
 def test_process_omr_rejects_unsupported_extensions(client: TestClient) -> None:
@@ -103,3 +151,23 @@ def test_get_job_musicxml_returns_404_when_missing(client: TestClient) -> None:
 
     assert response.status_code == 404
     assert response.json() == {"detail": "MusicXML result not found"}
+
+
+def test_get_job_result_returns_file(client: TestClient, tmp_path: Path) -> None:
+    result_path = tmp_path / "jobs" / "ready-job" / "output" / "result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text('{"job_id":"ready-job"}', encoding="utf-8")
+
+    response = client.get("/omr/jobs/ready-job/result")
+
+    assert response.status_code == 200
+    assert response.json() == {"job_id": "ready-job"}
+    assert response.headers["content-type"] == "application/json"
+    assert response.headers["content-disposition"] == 'attachment; filename="result.json"'
+
+
+def test_get_job_result_returns_404_when_missing(client: TestClient) -> None:
+    response = client.get("/omr/jobs/missing-job/result")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Structured result not found"}

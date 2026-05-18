@@ -90,3 +90,21 @@ def get_job_musicxml(job_id: str) -> FileResponse:
         media_type="application/vnd.recordare.musicxml+xml",
         filename="score.musicxml",
     )
+
+
+@router.get("/omr/jobs/{job_id}/result", response_class=FileResponse)
+def get_job_result(job_id: str) -> FileResponse:
+    safe_job_id = validate_job_id(job_id)
+    result_json_path = JOBS_DIR / safe_job_id / "output" / "result.json"
+
+    if not result_json_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Structured result not found",
+        )
+
+    return FileResponse(
+        path=result_json_path,
+        media_type="application/json",
+        filename="result.json",
+    )

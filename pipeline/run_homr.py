@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from pipeline.homr_artifacts import HomrArtifactPaths
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 HOMR_PROJECT_DIR = PROJECT_ROOT / "homr"
@@ -14,9 +15,9 @@ def run_homr(
     preprocessed_input_path: Path,
     output_dir: Path,
     logs_dir: Path,
-) -> Path:
+) -> HomrArtifactPaths:
     """
-    Run the vendored HOMR CLI and return the generated MusicXML output path.
+    Run the vendored HOMR CLI and return the generated output artifact paths.
 
     HOMR writes `<input-stem>.musicxml` next to the input image. The API exposes
     a stable `score.musicxml` filename instead, so the generated file is moved
@@ -25,10 +26,16 @@ def run_homr(
     output_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
+    geometry_json_path = output_dir / "geometry.json"
+    processed_image_path = output_dir / "homr_processed.png"
     command = [
         sys.executable,
         "-m",
         "homr.main",
+        "--geometry-json",
+        str(geometry_json_path.resolve()),
+        "--processed-image",
+        str(processed_image_path.resolve()),
         str(preprocessed_input_path.resolve()),
     ]
     homr_env = os.environ.copy()
@@ -62,7 +69,23 @@ def run_homr(
 
     musicxml_path = output_dir / "score.musicxml"
     shutil.move(str(generated_musicxml_path), musicxml_path)
-    return musicxml_path
+
+    if not geometry_json_path.exists():
+        raise RuntimeError(
+            "HOMR completed without producing geometry.json. "
+            f"Expected {geometry_json_path.name}."
+        )
+    if not processed_image_path.exists():
+        raise RuntimeError(
+            "HOMR completed without producing homr_processed.png. "
+            f"Expected {processed_image_path.name}."
+        )
+
+    return HomrArtifactPaths(
+        musicxml_path=musicxml_path,
+        geometry_json_path=geometry_json_path,
+        processed_image_path=processed_image_path,
+    )
 
 
 def _format_homr_log(

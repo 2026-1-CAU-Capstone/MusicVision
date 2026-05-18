@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import cv2
 import numpy as np
 
 from pipeline.chords.fallback_barlines import detect_barlines_cv
@@ -17,6 +18,8 @@ from pipeline.chords.models import (
     quantize_beat,
 )
 
+MIN_MEASURE_WIDTH = 12.0
+
 
 def assign_chords_to_measures(
     *,
@@ -31,6 +34,7 @@ def assign_chords_to_measures(
         page = _build_from_homr_geometry(
             tokens=tokens,
             geometry=geometry,
+            image=image,
             beats_per_bar=beats_per_bar,
         )
     else:
@@ -85,6 +89,7 @@ def _build_from_homr_geometry(
     *,
     tokens: list[ChordToken],
     geometry: dict[str, Any],
+    image: np.ndarray,
     beats_per_bar: int,
 ) -> dict[str, Any]:
     systems = _systems_from_geometry(geometry["systems"])
@@ -93,9 +98,18 @@ def _build_from_homr_geometry(
 
     for system, system_tokens in zip(systems, tokens_by_system, strict=True):
         barline_positions = _barline_x_positions_for_system(system, geometry["barlines"])
+        barline_positions = _recover_missing_barlines_from_image(
+            system=system,
+            barline_positions=barline_positions,
+            image=image,
+        )
+        boundaries = _include_leading_system_boundary_if_needed(
+            system=system,
+            barline_positions=barline_positions,
+        )
         measures, next_measure_index = _build_measures_from_boundaries(
             system=system,
-            boundaries=barline_positions,
+            boundaries=boundaries,
             next_measure_index=next_measure_index,
         )
         system.measures = measures
@@ -227,7 +241,7 @@ def _build_measures_from_boundaries(
     for column_index in range(len(merged_boundaries) - 1):
         left = merged_boundaries[column_index]
         right = merged_boundaries[column_index + 1]
-        if right - left < 12.0:
+        if right - left < MIN_MEASURE_WIDTH:
             continue
         measures.append(
             Measure(
@@ -288,6 +302,140 @@ def _assign_tokens_to_measures(
 
     for measure in measures:
         measure.chords.sort(key=lambda chord: (chord.bbox[0], chord.bbox[1]))
+
+
+def _include_leading_system_boundary_if_needed(
+    *,
+    system: SystemRow,
+    barline_positions: list[float],
+) -> list[float]:
+    """
+    HOMR barlines describe visual separators, but the left edge of a system is
+    also the leading boundary of its first measure. If the first detected
+    barline sits a full measure-width away from the system envelope, preserve
+    that leading interval instead of silently dropping measure 1.
+
+    Small gaps are treated as geometry jitter around a real left barline rather
+    than as a separate measure.
+    """
+    if not barline_positions:
+        return []
+
+    boundaries = sorted(merge_close_values(barline_positions, tol=1.0))
+    leading_gap = boundaries[0] - system.bbox[0]
+    substantial_gaps = [
+        right - left
+        for left, right in zip(boundaries, boundaries[1:])
+        if right - left >= MIN_MEASURE_WIDTH
+    ]
+    typical_measure_width = median(substantial_gaps)
+    min_leading_gap = max(
+        MIN_MEASURE_WIDTH * 2.0,
+        typical_measure_width * 0.25 if typical_measure_width else 0.0,
+    )
+
+    if leading_gap >= min_leading_gap:
+        return [system.bbox[0], *boundaries]
+    return boundaries
+
+
+def _recover_missing_barlines_from_image(
+    *,
+    system: SystemRow,
+    barline_positions: list[float],
+    image: np.ndarray,
+) -> list[float]:
+    """
+    Recover an occasional missed HOMR barline from the aligned processed image.
+
+    This is intentionally conservative: only inspect intervals that are much
+    wider than the surrounding measure widths, and only add one narrow/tall
+    vertical separator when the visual evidence is strong. That keeps HOMR as
+    the main source of truth while repairing clearly incomplete geometry such
+    as the missed interior barline in Airegin's first system.
+    """
+    boundaries = sorted(merge_close_values(barline_positions, tol=1.0))
+    substantial_gaps = [
+        right - left
+        for left, right in zip(boundaries, boundaries[1:])
+        if right - left >= MIN_MEASURE_WIDTH
+    ]
+    typical_measure_width = median(substantial_gaps)
+    if typical_measure_width <= 0:
+        return boundaries
+
+    recovered_positions: list[float] = []
+    for left, right in zip(boundaries, boundaries[1:]):
+        gap = right - left
+        if gap < typical_measure_width * 1.6 or gap > typical_measure_width * 2.5:
+            continue
+
+        candidates = _vertical_separator_candidates(
+            image=image,
+            system=system,
+            left=left,
+            right=right,
+        )
+        if not candidates:
+            continue
+
+        recovered_positions.append(
+            min(
+                candidates,
+                key=lambda candidate: (
+                    abs((candidate - left) - typical_measure_width)
+                    + abs((right - candidate) - typical_measure_width),
+                    abs(candidate - ((left + right) / 2.0)),
+                ),
+            )
+        )
+
+    return sorted(merge_close_values([*boundaries, *recovered_positions], tol=1.0))
+
+
+def _vertical_separator_candidates(
+    *,
+    image: np.ndarray,
+    system: SystemRow,
+    left: float,
+    right: float,
+) -> list[float]:
+    if len(image.shape) == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = image
+
+    y0 = max(0, int(round(system.y_top)))
+    y1 = min(gray.shape[0], int(round(system.y_bottom)) + 1)
+    x0 = max(0, int(round(left)))
+    x1 = min(gray.shape[1], int(round(right)) + 1)
+    roi = gray[y0:y1, x0:x1]
+    if roi.size == 0:
+        return []
+
+    _, binary = cv2.threshold(roi, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    minimum_height = max(3, int(round(roi.shape[0] * 0.75)))
+    vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, minimum_height))
+    vertical = cv2.morphologyEx(binary, cv2.MORPH_OPEN, vertical_kernel)
+
+    label_count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        (vertical > 0).astype(np.uint8),
+        8,
+    )
+    candidates: list[float] = []
+    margin = MIN_MEASURE_WIDTH * 2.0
+
+    for label in range(1, label_count):
+        x, _y, width, height, _area = [int(value) for value in stats[label]]
+        if height < minimum_height or width > MIN_MEASURE_WIDTH:
+            continue
+
+        center_x = float(x0 + x + (width - 1) / 2.0)
+        if center_x - left < margin or right - center_x < margin:
+            continue
+        candidates.append(center_x)
+
+    return candidates
 
 
 def _cluster_tokens_into_rows(tokens: list[ChordToken]) -> list[SystemRow]:

@@ -75,6 +75,80 @@ Assignment behavior:
 4. estimate beat position within the measure where practical
 5. use the CV fallback only if HOMR geometry is missing, incomplete, or unusable
 
+### Geometry repair heuristics
+
+HOMR geometry remains the preferred source of truth, but the assignment stage
+does two conservative repairs when HOMR geometry is clearly incomplete.
+
+#### 1. Preserve a leading first measure
+
+HOMR barlines are visual separators; the left edge of a system can also be the
+left boundary of the first measure even when no barline is drawn there.
+
+The current rule:
+
+- merge near-duplicate barline x-positions within `1 px`
+- treat gaps below `12 px` as non-measure noise
+- compute the median width of the remaining substantial gaps
+- add the system's left edge as a leading boundary when:
+
+```text
+leading_gap >= max(24 px, 0.25 * typical_measure_width)
+```
+
+This restored the first visual measure of each system in the Airegin sample.
+
+#### 2. Recover one missed interior barline inside an over-wide interval
+
+If one HOMR interval is much wider than the other measures in the same system,
+the assignment stage scans that interval in `homr_processed.png` for a plausible
+missing separator.
+
+An interval is considered **over-wide** only when:
+
+```text
+1.6 * typical_measure_width <= gap <= 2.5 * typical_measure_width
+```
+
+The scan uses the system-height ROI and looks for vertical connected components
+after a vertical morphological opening. A candidate is kept only when:
+
+```text
+height >= 75% of the system ROI height
+width  <= 12 px
+distance from either interval edge >= 24 px
+```
+
+If multiple candidates remain, the chosen split minimizes:
+
+```text
+abs((candidate_x - left_x)  - typical_measure_width)
++ abs((right_x - candidate_x) - typical_measure_width)
+```
+
+with midpoint proximity as the tiebreaker.
+
+This repaired the missed interior separator in Airegin's first system, moving
+`C7` from beat 3 of an over-wide measure to beat 1 of the following measure.
+
+#### How this differs from note stems
+
+The recovery pass does **not** claim that shape alone can perfectly separate
+barlines from note stems. Some note stems can also be narrow and tall.
+
+Instead, it reduces stem confusion through context:
+
+- it only searches intervals that are already measure-width outliers
+- it requires a separator to span most of the full staff/system ROI height
+- it prefers the candidate that restores ordinary-looking adjacent measure
+  widths
+
+So the current implementation is best described as a conservative
+**missing-boundary repair**, not a general-purpose visual barline classifier.
+
+The more permissive CV fallback detector in `fallback_barlines.py` remains
+separate and is still used only when HOMR geometry is missing or unusable.
+
 ## Result payload
 
 `result.json` keeps the existing job-level metadata and now includes structured
@@ -168,3 +242,6 @@ Intentionally deferred:
 - TrOCR support
 - HOMR in-process refactor
 - reconstructing original-upload coordinates from processed-image coordinates
+
+For a chronological record of the implementation changes and verification
+results, see `docs/chord_ocr_changelog.md`.

@@ -55,6 +55,93 @@ def test_measure_assignment_prefers_homr_geometry() -> None:
     assert [measure["chords"][0]["beat"] for measure in measures] == [2, 2, 3]
 
 
+def test_measure_assignment_keeps_leading_system_interval_as_first_measure() -> None:
+    geometry = {
+        "coordinate_space": "homr_processed_image",
+        "image": {"width": 420, "height": 220},
+        "systems": [
+            {
+                "index": 1,
+                "bbox": [20, 70, 400, 150],
+                "staffs": [{"index": 1, "bbox": [20, 70, 400, 150]}],
+            }
+        ],
+        "barlines": [
+            {"bbox": [120, 70, 124, 150], "center": [122, 110]},
+            {"bbox": [220, 70, 224, 150], "center": [222, 110]},
+            {"bbox": [320, 70, 324, 150], "center": [322, 110]},
+        ],
+    }
+
+    result = assign_chords_to_measures(
+        tokens=[
+            ChordToken("Dm7", "Dm7", (50, 30, 80, 50)),
+            ChordToken("G7", "G7", (150, 30, 175, 50)),
+        ],
+        geometry=geometry,
+        image=np.zeros((220, 420, 3), dtype=np.uint8),
+        source_path="homr_processed.png",
+    )
+
+    measures = result["pages"][0]["systems"][0]["measures"]
+
+    assert [measure["bbox"] for measure in measures] == [
+        [20.0, 70.0, 122.0, 150.0],
+        [122.0, 70.0, 222.0, 150.0],
+        [222.0, 70.0, 322.0, 150.0],
+    ]
+    assert [measure["chords"][0]["text_norm"] for measure in measures[:2]] == [
+        "Dm7",
+        "G7",
+    ]
+
+
+def test_measure_assignment_recovers_a_missing_barline_inside_an_overwide_interval() -> None:
+    image = np.full((220, 600, 3), 255, dtype=np.uint8)
+    for x in (120, 220, 320, 420, 520):
+        image[70:151, x : x + 3] = 0
+
+    geometry = {
+        "coordinate_space": "homr_processed_image",
+        "image": {"width": 600, "height": 220},
+        "systems": [
+            {
+                "index": 1,
+                "bbox": [20, 70, 560, 150],
+                "staffs": [{"index": 1, "bbox": [20, 70, 560, 150]}],
+            }
+        ],
+        "barlines": [
+            {"bbox": [120, 70, 123, 150], "center": [121.5, 110]},
+            {"bbox": [320, 70, 323, 150], "center": [321.5, 110]},
+            {"bbox": [420, 70, 423, 150], "center": [421.5, 110]},
+            {"bbox": [520, 70, 523, 150], "center": [521.5, 110]},
+        ],
+    }
+
+    result = assign_chords_to_measures(
+        tokens=[
+            ChordToken("Dm7", "Dm7", (145, 30, 175, 50)),
+            ChordToken("G7", "G7", (225, 30, 245, 50)),
+        ],
+        geometry=geometry,
+        image=image,
+        source_path="homr_processed.png",
+    )
+
+    measures = result["pages"][0]["systems"][0]["measures"]
+
+    assert [measure["bbox"] for measure in measures] == [
+        [20.0, 70.0, 121.5, 150.0],
+        [121.5, 70.0, 221.0, 150.0],
+        [221.0, 70.0, 321.5, 150.0],
+        [321.5, 70.0, 421.5, 150.0],
+        [421.5, 70.0, 521.5, 150.0],
+    ]
+    assert measures[2]["chords"][0]["text_norm"] == "G7"
+    assert measures[2]["chords"][0]["beat"] == 1
+
+
 @pytest.mark.parametrize(
     "geometry",
     [

@@ -11,7 +11,9 @@ OUTPUTS_DIR = STORAGE_DIR / "outputs"
 APP_NAME = os.getenv("APP_NAME", "MusicVision OMR Service")
 APP_VERSION = os.getenv("APP_VERSION", "0.1.0")
 
-ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".pdf"}
+# HOMR currently consumes raster image files directly. PDF support can be
+# reintroduced once preprocess_input() rasterizes pages before OMR execution.
+ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 
 
 for directory in (UPLOADS_DIR, JOBS_DIR, OUTPUTS_DIR):

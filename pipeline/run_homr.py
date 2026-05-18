@@ -1,38 +1,12 @@
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 
-FAKE_MUSICXML = """<?xml version="1.0" encoding="UTF-8"?>
-<score-partwise version="4.0">
-  <part-list>
-    <score-part id="P1">
-      <part-name>Piano</part-name>
-    </score-part>
-  </part-list>
-  <part id="P1">
-    <measure number="1">
-      <attributes>
-        <divisions>1</divisions>
-        <key>
-          <fifths>0</fifths>
-        </key>
-        <time>
-          <beats>4</beats>
-          <beat-type>4</beat-type>
-        </time>
-        <clef>
-          <sign>G</sign>
-          <line>2</line>
-        </clef>
-      </attributes>
-      <note>
-        <rest/>
-        <duration>4</duration>
-        <type>whole</type>
-      </note>
-    </measure>
-  </part>
-</score-partwise>
-"""
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+HOMR_PROJECT_DIR = PROJECT_ROOT / "homr"
 
 
 def run_homr(
@@ -42,20 +16,68 @@ def run_homr(
     logs_dir: Path,
 ) -> Path:
     """
-    Produce a placeholder MusicXML file so the API flow can be tested end-to-end.
+    Run the vendored HOMR CLI and return the generated MusicXML output path.
 
-    TODO: Replace this stub with the real HOMR invocation and capture its logs/output.
+    HOMR writes `<input-stem>.musicxml` next to the input image. The API exposes
+    a stable `score.musicxml` filename instead, so the generated file is moved
+    into the job output directory after a successful run.
     """
-    _ = preprocessed_input_path
+    output_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    musicxml_path = output_dir / "score.musicxml"
-    musicxml_path.write_text(FAKE_MUSICXML, encoding="utf-8")
+    command = [
+        sys.executable,
+        "-m",
+        "homr.main",
+        str(preprocessed_input_path.resolve()),
+    ]
+    homr_env = os.environ.copy()
+    homr_env["PYTHONUTF8"] = "1"
+    completed = subprocess.run(
+        command,
+        cwd=HOMR_PROJECT_DIR,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=homr_env,
+    )
 
     log_path = logs_dir / "homr.log"
     log_path.write_text(
-        "Placeholder HOMR execution completed. Replace with real integration later.\n",
+        _format_homr_log(command=command, returncode=completed.returncode, completed=completed),
         encoding="utf-8",
     )
 
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"HOMR failed with exit code {completed.returncode}. See {log_path.name} for details."
+        )
+
+    generated_musicxml_path = preprocessed_input_path.with_suffix(".musicxml")
+    if not generated_musicxml_path.exists():
+        raise RuntimeError(
+            "HOMR completed without producing a MusicXML file. "
+            f"Expected {generated_musicxml_path.name}."
+        )
+
+    musicxml_path = output_dir / "score.musicxml"
+    shutil.move(str(generated_musicxml_path), musicxml_path)
     return musicxml_path
+
+
+def _format_homr_log(
+    *,
+    command: list[str],
+    returncode: int,
+    completed: subprocess.CompletedProcess[str],
+) -> str:
+    return (
+        f"Command: {' '.join(command)}\n"
+        f"Exit code: {returncode}\n"
+        "\n"
+        "[stdout]\n"
+        f"{completed.stdout}"
+        "\n"
+        "[stderr]\n"
+        f"{completed.stderr}"
+    )

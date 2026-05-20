@@ -26,6 +26,9 @@ The HOMR subprocess boundary is intentionally preserved in this first pass.
 MusicVision still invokes vendored HOMR through the CLI and consumes additional
 artifacts afterward.
 
+For the internal HOMR boundary between pre-TrOMR visual geometry and post-TrOMR
+MusicXML generation, see [`homr_tromr_pipeline.md`](homr_tromr_pipeline.md).
+
 ## Why `homr_processed.png` matters
 
 HOMR autocrops and resizes input images before detection. The geometry exported

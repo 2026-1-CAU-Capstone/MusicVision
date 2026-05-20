@@ -84,7 +84,7 @@ Assignment behavior:
 ### Geometry repair heuristics
 
 HOMR geometry remains the preferred source of truth, but the assignment stage
-does two conservative repairs when HOMR geometry is clearly incomplete.
+does conservative repairs when HOMR geometry is clearly incomplete.
 
 #### 1. Preserve a leading first measure
 
@@ -108,13 +108,26 @@ This restored the first visual measure of each system in the Airegin sample.
 
 If one HOMR interval is much wider than the other measures in the same system,
 the assignment stage scans that interval in `homr_processed.png` for a plausible
-missing separator.
+missing separator. The system-left boundary is included before measuring typical
+widths, so an already-merged wide interval cannot inflate the baseline as easily.
 
 An interval is considered **over-wide** only when:
 
 ```text
 1.6 * typical_measure_width <= gap <= 2.5 * typical_measure_width
 ```
+
+When `score.musicxml` says the same visual system should contain more measures
+than the current visual geometry produced, the scan can also inspect milder
+outliers:
+
+```text
+1.25 * typical_measure_width <= gap <= 2.75 * typical_measure_width
+```
+
+MusicXML is only used as a count constraint. The split still requires image
+evidence inside `homr_processed.png`; MusicXML does not provide the missing
+x-coordinate.
 
 The scan uses the system-height ROI and looks for vertical connected components
 after a vertical morphological opening. A candidate is kept only when:
@@ -125,14 +138,16 @@ width  <= 12 px
 distance from either interval edge >= 24 px
 ```
 
-If multiple candidates remain, the chosen split minimizes:
+If multiple candidates remain, the chosen split prefers candidates that restore
+ordinary-looking adjacent widths, with a small bonus for stronger vertical
+components:
 
 ```text
 abs((candidate_x - left_x)  - typical_measure_width)
 + abs((right_x - candidate_x) - typical_measure_width)
 ```
 
-with midpoint proximity as the tiebreaker.
+with midpoint proximity as the final tiebreaker.
 
 This repaired the missed interior separator in Airegin's first system, moving
 `C7` from beat 3 of an over-wide measure to beat 1 of the following measure.
@@ -266,7 +281,20 @@ Example shape:
   "measure_alignment": {
     "status": "aligned",
     "musicxml_measure_count": 45,
-    "visual_measure_count": 45
+    "visual_measure_count": 45,
+    "musicxml_system_count": 8,
+    "visual_system_count": 8,
+    "aligned_system_count": 8,
+    "mismatched_system_count": 0,
+    "system_alignment": [
+      {
+        "visual_system_index": 1,
+        "musicxml_system_index": 1,
+        "status": "aligned",
+        "musicxml_measure_count": 5,
+        "visual_measure_count": 5
+      }
+    ]
   },
   "chord_ocr": {
     "backend": "easyocr",
@@ -304,34 +332,64 @@ Example shape:
 ### Measure alignment with MusicXML
 
 After HOMR produces `score.musicxml`, the pipeline reads the MusicXML measure
-sequence and compares it with the visual measure sequence used for chord
-assignment.
+sequence and groups it by system using MusicXML `<print new-system="yes" />`
+markers. It then compares those MusicXML systems with the visual systems used
+for chord assignment.
 
-If the counts match, the payload reports:
+If all system counts match, the payload reports:
 
 ```json
 "measure_alignment": {
   "status": "aligned",
   "musicxml_measure_count": 45,
-  "visual_measure_count": 45
+  "visual_measure_count": 45,
+  "aligned_system_count": 8,
+  "mismatched_system_count": 0
 }
 ```
 
 and each visual measure receives its corresponding
 `musicxml_measure_number`.
 
-If the counts do **not** match, the payload reports:
+If some systems match and some do not, the payload reports `"status": "partial"`.
+Measures in matching systems still receive `musicxml_measure_number`; measures in
+mismatched systems do not receive guessed numbers.
+
+Example:
+
+```json
+"measure_alignment": {
+  "status": "partial",
+  "musicxml_measure_count": 33,
+  "visual_measure_count": 32,
+  "aligned_system_count": 7,
+  "mismatched_system_count": 1,
+  "system_alignment": [
+    {
+      "visual_system_index": 2,
+      "musicxml_system_index": 2,
+      "status": "mismatch",
+      "musicxml_measure_count": 4,
+      "visual_measure_count": 3
+    }
+  ]
+}
+```
+
+If no safe system-level correspondence exists, the payload reports:
 
 ```json
 "measure_alignment": {
   "status": "mismatch",
   "musicxml_measure_count": 45,
   "visual_measure_count": 44
+  "visual_system_count": 7
 }
 ```
 
-and the pipeline intentionally does **not** guess a one-to-one mapping. That
-keeps downstream consumers from silently combining incompatible sequences.
+The pipeline intentionally does **not** guess measure numbers for mismatched or
+unmatched systems. That keeps downstream consumers from silently combining
+incompatible sequences while still preserving usable partial results.
 
 ## API surface
 

@@ -142,6 +142,100 @@ def test_measure_assignment_recovers_a_missing_barline_inside_an_overwide_interv
     assert measures[2]["chords"][0]["beat"] == 1
 
 
+def test_measure_assignment_uses_leading_boundary_when_detecting_overwide_intervals() -> None:
+    image = np.full((220, 1920, 3), 255, dtype=np.uint8)
+    for x in (543, 1017, 1490, 1865):
+        image[70:151, x : x + 3] = 0
+
+    geometry = {
+        "coordinate_space": "homr_processed_image",
+        "image": {"width": 1920, "height": 220},
+        "systems": [
+            {
+                "index": 1,
+                "bbox": [30, 70, 1870, 150],
+                "staffs": [{"index": 1, "bbox": [30, 70, 1870, 150]}],
+            }
+        ],
+        "barlines": [
+            {"bbox": [543, 70, 546, 150], "center": [544.5, 110]},
+            {"bbox": [1490, 70, 1493, 150], "center": [1491.5, 110]},
+            {"bbox": [1865, 70, 1868, 150], "center": [1866.5, 110]},
+        ],
+    }
+
+    result = assign_chords_to_measures(
+        tokens=[
+            ChordToken("Gmaj7", "Gmaj7", (600, 30, 700, 50)),
+            ChordToken("Ebmaj7", "Ebmaj7", (1100, 30, 1230, 50)),
+        ],
+        geometry=geometry,
+        image=image,
+        source_path="homr_processed.png",
+    )
+
+    measures = result["pages"][0]["systems"][0]["measures"]
+
+    assert [measure["bbox"] for measure in measures] == [
+        [30.0, 70.0, 544.5, 150.0],
+        [544.5, 70.0, 1018.0, 150.0],
+        [1018.0, 70.0, 1491.5, 150.0],
+        [1491.5, 70.0, 1866.5, 150.0],
+    ]
+    assert [measure["chords"][0]["text_norm"] for measure in measures[1:3]] == [
+        "Gmaj7",
+        "Ebmaj7",
+    ]
+
+
+def test_measure_assignment_can_use_expected_system_count_to_inspect_suspicious_gap() -> None:
+    image = np.full((220, 1500, 3), 255, dtype=np.uint8)
+    for x in (420, 730, 1040, 1470):
+        image[70:151, x : x + 3] = 0
+
+    geometry = {
+        "coordinate_space": "homr_processed_image",
+        "image": {"width": 1500, "height": 220},
+        "systems": [
+            {
+                "index": 1,
+                "bbox": [20, 70, 1480, 150],
+                "staffs": [{"index": 1, "bbox": [20, 70, 1480, 150]}],
+            }
+        ],
+        "barlines": [
+            {"bbox": [420, 70, 423, 150], "center": [421.5, 110]},
+            {"bbox": [1040, 70, 1043, 150], "center": [1041.5, 110]},
+            {"bbox": [1470, 70, 1473, 150], "center": [1471.5, 110]},
+        ],
+    }
+
+    without_expected_count = assign_chords_to_measures(
+        tokens=[],
+        geometry=geometry,
+        image=image,
+        source_path="homr_processed.png",
+    )
+    with_expected_count = assign_chords_to_measures(
+        tokens=[],
+        geometry=geometry,
+        image=image,
+        source_path="homr_processed.png",
+        expected_measure_counts_by_system=[4],
+    )
+
+    assert len(without_expected_count["pages"][0]["systems"][0]["measures"]) == 3
+    assert [
+        measure["bbox"]
+        for measure in with_expected_count["pages"][0]["systems"][0]["measures"]
+    ] == [
+        [20.0, 70.0, 421.5, 150.0],
+        [421.5, 70.0, 731.0, 150.0],
+        [731.0, 70.0, 1041.5, 150.0],
+        [1041.5, 70.0, 1471.5, 150.0],
+    ]
+
+
 @pytest.mark.parametrize(
     "geometry",
     [

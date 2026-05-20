@@ -550,6 +550,126 @@ Added deterministic tests for:
 - canonical `/chord-assignments` retrieval
 - backward-compatible `/result` retrieval from legacy files
 
+## 2026-05-20 - Partial alignment and MusicXML-guided barline repair
+
+### Problem
+
+The alignment contract was too binary. If the visual measure sequence differed
+from the MusicXML sequence by even one measure, the entire job was marked
+`mismatch` and no visual measures received `musicxml_measure_number`.
+
+The Giant Steps sample exposed why this was too strict:
+
+```text
+MusicXML measures: 33
+visual measures:   32
+```
+
+The mismatch was localized to system 2, where HOMR's exported visual barline
+geometry missed one usable interior boundary. Other systems still had matching
+measure counts and could be mapped safely.
+
+The same sample also exposed a weakness in the missing-barline repair heuristic.
+The oversized interval polluted the median width calculation, so the interval was
+not considered over-wide enough to inspect.
+
+### Fix
+
+#### System-level MusicXML alignment
+
+`pipeline/musicxml_alignment.py` now groups MusicXML measures by system using
+`<print new-system="yes" />` markers. When the MusicXML and visual system counts
+match, each system is evaluated independently.
+
+New behavior:
+
+| Case | Status | Measure-number behavior |
+| --- | --- | --- |
+| all systems match | `aligned` | every visual measure receives `musicxml_measure_number` |
+| some systems match | `partial` | only matching systems receive `musicxml_measure_number` |
+| no safe mapping | `mismatch` | no guessed measure numbers |
+
+The payload now includes:
+
+```json
+"measure_alignment": {
+  "status": "partial",
+  "musicxml_measure_count": 33,
+  "visual_measure_count": 32,
+  "musicxml_system_count": 8,
+  "visual_system_count": 8,
+  "aligned_system_count": 7,
+  "mismatched_system_count": 1,
+  "system_alignment": []
+}
+```
+
+This lets downstream consumers keep usable results while marking only localized
+problem systems for review.
+
+#### Leading-boundary-aware missing-barline detection
+
+The missing-boundary repair now includes the synthetic system-left boundary
+before computing typical measure widths. That prevents an already-merged wide
+interval from inflating the baseline enough to hide itself.
+
+#### MusicXML system-count hint
+
+The FastAPI pipeline now reads MusicXML measure counts by system before chord
+assignment and passes them into `assign_chords_to_measures()`.
+
+When a visual system is short relative to MusicXML, the repair pass can inspect
+milder width outliers:
+
+```text
+1.25 * typical_measure_width <= gap <= 2.75 * typical_measure_width
+```
+
+This does not blindly trust MusicXML. A split still requires a vertical separator
+candidate in `homr_processed.png`, because MusicXML does not contain the missing
+x-coordinate.
+
+#### Candidate scoring refinement
+
+When multiple vertical candidates exist inside a suspicious interval, selection
+now balances:
+
+- how well the split restores plausible adjacent measure widths
+- the strength of the vertical component
+- midpoint proximity as a final tiebreaker
+
+This avoids preferring a thin note-stem-like candidate only because it makes the
+interval widths slightly more even.
+
+### Verification
+
+Added deterministic tests for:
+
+- fully aligned system-level MusicXML mapping
+- partial mapping where only matching systems receive `musicxml_measure_number`
+- mismatched systems that still avoid guessed measure numbers
+- leading-boundary-aware over-wide interval detection
+- MusicXML expected-count-guided inspection of a suspicious gap
+
+Replayed the existing Giant Steps artifacts through the updated assignment and
+alignment code without rerunning HOMR/EasyOCR:
+
+| Metric | Before | After |
+| --- | ---: | ---: |
+| visual measures | `32` | `33` |
+| MusicXML measures | `33` | `33` |
+| alignment status | `mismatch` | `aligned` |
+| system 2 visual measures | `3` | `4` |
+
+The repaired system 2 assignment now separates:
+
+```text
+Gmaj7 / Bb7
+Ebmaj7 / F#7
+```
+
+instead of collapsing them into one oversized visual measure.
+
 ## Progress-by-the-numbers reference
 
 For the consolidated metric history of the Airegin reference score, including

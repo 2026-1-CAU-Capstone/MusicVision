@@ -32,7 +32,9 @@ would look like:
   "measureAlignment": {
     "status": "aligned",
     "musicxmlMeasureCount": 45,
-    "visualMeasureCount": 45
+    "visualMeasureCount": 45,
+    "alignedSystemCount": 8,
+    "mismatchedSystemCount": 0
   },
   "musicXml": "<score-partwise>...</score-partwise>",
   "chordAssignments": [
@@ -78,11 +80,25 @@ text_raw
 
 ## Alignment rule the frontend should respect
 
-Only present the chord-to-measure pairing as reliable when:
+The frontend can treat chord-to-measure pairing as fully reliable when:
 
 ```json
 "measureAlignment.status": "aligned"
 ```
+
+If the backend reports:
+
+```json
+{
+  "measureAlignment": {
+    "status": "partial"
+  }
+}
+```
+
+the frontend should still show the result. Measures that were aligned by the
+backend can be displayed normally, while mismatched systems should be marked as
+review/correction targets.
 
 If the backend reports:
 

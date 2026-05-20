@@ -135,6 +135,19 @@ def test_process_omr_creates_outputs(
         "status": "aligned",
         "musicxml_measure_count": 1,
         "visual_measure_count": 1,
+        "musicxml_system_count": 1,
+        "visual_system_count": 1,
+        "aligned_system_count": 1,
+        "mismatched_system_count": 0,
+        "system_alignment": [
+            {
+                "visual_system_index": 1,
+                "musicxml_system_index": 1,
+                "status": "aligned",
+                "musicxml_measure_count": 1,
+                "visual_measure_count": 1,
+            }
+        ],
     }
     assert chord_assignments_payload.json()["pages"][0]["systems"][0]["measures"][0][
         "musicxml_measure_number"

@@ -32,7 +32,9 @@ The important integration guarantee is the measure-alignment block inside
   "measure_alignment": {
     "status": "aligned",
     "musicxml_measure_count": 45,
-    "visual_measure_count": 45
+    "visual_measure_count": 45,
+    "aligned_system_count": 8,
+    "mismatched_system_count": 0
   }
 }
 ```
@@ -40,6 +42,11 @@ The important integration guarantee is the measure-alignment block inside
 When `status` is `"aligned"`, each visual measure includes the corresponding
 `musicxml_measure_number`, so consumers can join printed chords to MusicXML
 measures safely.
+
+When `status` is `"partial"`, the payload includes system-level alignment
+metadata. Measures in aligned systems still receive `musicxml_measure_number`;
+measures in mismatched systems intentionally do not. Consumers should preserve
+the result and surface the mismatched systems as review/correction targets.
 
 ## Canonical endpoints
 

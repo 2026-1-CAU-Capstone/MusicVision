@@ -1,0 +1,2754 @@
+{
+  "title": "Nica's Dream",
+  "composer": "Junior Cook",
+  "key": "Cm",
+  "timeSignature": "4/4",
+  "tempo": 250,
+  "measures": [
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8",
+          "beamBreak": true
+        },
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8"
+        }
+      ]
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "q"
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "q"
+        },
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "q",
+          "dotted": true,
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "a/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        }
+      ]
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "q"
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "h",
+          "dotted": true
+        }
+      ],
+      "chord": "C-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "a/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8",
+          "tie": true
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "q"
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "q",
+          "accidentals": {
+            "0": "b"
+          }
+        }
+      ],
+      "chord": "C-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "q"
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "q",
+          "tie": true
+        }
+      ],
+      "chord": "Bb-M7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "q",
+          "dotted": true
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "q"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        }
+      ],
+      "chord": "Bb-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "hr"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8r"
+        },
+        {
+          "keys": [
+            "g/4"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        }
+      ],
+      "chord": "C-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "q",
+          "dotted": true
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "q"
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8",
+          "tie": true
+        }
+      ],
+      "chord": "C-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "q",
+          "dotted": true
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "h",
+          "accidentals": {
+            "0": "b"
+          }
+        }
+      ],
+      "chord": "Bb-7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "wr"
+        }
+      ],
+      "chord": "Eb7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "wr"
+        }
+      ],
+      "chord": "Bb-7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "c/6"
+          ],
+          "duration": "q"
+        },
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "a/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "q"
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          },
+          "tie": true
+        }
+      ],
+      "chord": "Eb7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "h",
+          "accidentals": {
+            "0": "b"
+          },
+          "tie": true
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "a/4"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        }
+      ],
+      "chord": "Ab△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "g/4"
+          ],
+          "duration": "q",
+          "dotted": true
+        },
+        {
+          "keys": [
+            "f/4"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "g/4"
+          ],
+          "duration": "q"
+        },
+        {
+          "keys": [
+            "f/4"
+          ],
+          "duration": "q"
+        }
+      ],
+      "chord": "D7#9#5"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "wr"
+        }
+      ],
+      "chord": "G7#5"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8r"
+        },
+        {
+          "keys": [
+            "g/4"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "8",
+          "beamBreak": true
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "a/4"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "g/4"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "f/4"
+          ],
+          "duration": "8"
+        }
+      ],
+      "chord": "G7#5"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "d/4"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "e/4"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8"
+        }
+      ],
+      "chord": "C-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        }
+      ],
+      "chord": "C-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8r"
+        },
+        {
+          "keys": [
+            "d/6"
+          ],
+          "duration": "8",
+          "beamBreak": true
+        },
+        {
+          "keys": [
+            "e/6"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "c/6"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8r"
+        },
+        {
+          "keys": [
+            "d/6"
+          ],
+          "duration": "8"
+        }
+      ],
+      "chord": "C-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8r"
+        },
+        {
+          "keys": [
+            "e/6"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8r"
+        },
+        {
+          "keys": [
+            "c/6"
+          ],
+          "duration": "8",
+          "tie": true
+        },
+        {
+          "keys": [
+            "c/6"
+          ],
+          "duration": "q"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        }
+      ],
+      "chord": "C-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8r"
+        },
+        {
+          "keys": [
+            "d/6"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "q",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "c/6"
+          ],
+          "duration": "q"
+        }
+      ],
+      "chord": "Bb-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "d/6"
+          ],
+          "duration": "q",
+          "dotted": true,
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "q",
+          "dotted": true,
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        }
+      ],
+      "chord": "Bb-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "hr"
+        },
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8r"
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        }
+      ],
+      "chord": "C-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8r"
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8r"
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        }
+      ],
+      "chord": "C-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "hr"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8r"
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8"
+        }
+      ],
+      "chord": "Bb-7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "d/6"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "a/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "c/6"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "a/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8",
+          "tuplet": 3
+        },
+        {
+          "keys": [
+            "a/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          },
+          "tuplet": 3
+        },
+        {
+          "keys": [
+            "a/5"
+          ],
+          "duration": "8",
+          "tuplet": 3
+        }
+      ],
+      "chord": "Eb7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          },
+          "tuplet": 3
+        },
+        {
+          "keys": [
+            "a/5"
+          ],
+          "duration": "8",
+          "tuplet": 3
+        },
+        {
+          "keys": [
+            "a/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          },
+          "tuplet": 3
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8",
+          "beamBreak": true
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        }
+      ],
+      "chord": "Bb-7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "a/4"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "g/4"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        }
+      ],
+      "chord": "Eb7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "hr"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "g/4"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "a/4"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        }
+      ],
+      "chord": "Ab△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        },
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "q",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "a/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8",
+          "tie": true
+        }
+      ],
+      "chord": "D7#9#5"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "q"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "hr"
+        }
+      ],
+      "chord": "G7#5"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "hr"
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "g/4"
+          ],
+          "duration": "8"
+        }
+      ],
+      "chord": "G7#5"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        }
+      ],
+      "chord": "C-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "q",
+          "dotted": true
+        },
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "8",
+          "beamBreak": true
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        }
+      ],
+      "chord": "C-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "wr"
+        }
+      ],
+      "chord": "Bb7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "c/6"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "a/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "c/6"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "a/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8"
+        }
+      ],
+      "chord": "Bb7sus"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "q",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "q",
+          "dotted": true,
+          "accidentals": {
+            "0": "b"
+          },
+          "tie": true
+        },
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "q",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "a/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        }
+      ],
+      "chord": "Gø7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "q",
+          "dotted": true
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8",
+          "beamBreak": true
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "q",
+          "accidentals": {
+            "0": "b"
+          }
+        }
+      ],
+      "chord": "C7#5"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "hr"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8"
+        }
+      ],
+      "chord": "F7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "#"
+          }
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8r"
+        }
+      ],
+      "chord": "Bb7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "q"
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          },
+          "tie": true
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "q",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        }
+      ],
+      "chord": "Eb△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "a/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          },
+          "beamBreak": true
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8"
+        }
+      ],
+      "chord": "F#-7  B7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "q"
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8",
+          "tuplet": 3
+        },
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "8",
+          "tuplet": 3
+        },
+        {
+          "keys": [
+            "a/4"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          },
+          "tuplet": 3
+        },
+        {
+          "keys": [
+            "g/4"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "f/4"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        }
+      ],
+      "chord": "Bb7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "hr"
+        },
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "q",
+          "dotted": true,
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "a/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        }
+      ],
+      "chord": "Bb7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "q"
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "q",
+          "tie": true
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "q",
+          "dotted": true
+        },
+        {
+          "keys": [
+            "a/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        }
+      ],
+      "chord": "Gø7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "q",
+          "dotted": true
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8",
+          "beamBreak": true
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        }
+      ],
+      "chord": "C7#5"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "a/4"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          },
+          "tie": true
+        }
+      ],
+      "chord": "F7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "q",
+          "dotted": true,
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "#"
+          },
+          "beamBreak": true
+        },
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "#"
+          }
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        }
+      ],
+      "chord": "Bb7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "wr"
+        }
+      ],
+      "chord": "Eb△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "q",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        }
+      ],
+      "chord": "Dø7  G7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "q"
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "q"
+        }
+      ],
+      "chord": "C-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "q"
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "a/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          },
+          "beamBreak": true
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "q"
+        }
+      ],
+      "chord": "C-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "q"
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "q",
+          "tie": true
+        }
+      ],
+      "chord": "Bb-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "q",
+          "dotted": true
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "#"
+          },
+          "beamBreak": true
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "q",
+          "accidentals": {
+            "0": "b"
+          }
+        }
+      ],
+      "chord": "Bb-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "hr"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8r"
+        },
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "8"
+        }
+      ],
+      "chord": "C-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "c/6"
+          ],
+          "duration": "8",
+          "tie": true
+        },
+        {
+          "keys": [
+            "c/6"
+          ],
+          "duration": "q"
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          },
+          "tuplet": 3
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8",
+          "tuplet": 3
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          },
+          "tuplet": 3
+        },
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "q"
+        }
+      ],
+      "chord": "C-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          },
+          "tie": true
+        },
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "h",
+          "dotted": true,
+          "accidentals": {
+            "0": "b"
+          },
+          "tie": true
+        }
+      ],
+      "chord": "Bb-7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "h",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "a/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "f/5"
+          ],
+          "duration": "8"
+        }
+      ],
+      "chord": "Eb7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "q",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "q",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "hr"
+        }
+      ],
+      "chord": "Bb-7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "hr"
+        },
+        {
+          "keys": [
+            "e/6"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "e/6"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        }
+      ],
+      "chord": "Eb7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8r"
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8r"
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8r"
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        }
+      ],
+      "chord": "Ab△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "q",
+          "dotted": true,
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          },
+          "beamBreak": true
+        },
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        }
+      ],
+      "chord": "D7#9#5"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "hr"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8r"
+        },
+        {
+          "keys": [
+            "a/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        }
+      ],
+      "chord": "G7#5"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "q",
+          "dotted": true,
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "a/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/5"
+          ],
+          "duration": "q",
+          "dotted": true,
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "a/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        }
+      ],
+      "chord": "G7#5"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "g/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "g/4"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "8",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "c/5"
+          ],
+          "duration": "8"
+        },
+        {
+          "keys": [
+            "d/5"
+          ],
+          "duration": "8"
+        }
+      ],
+      "chord": "C-△7"
+    },
+    {
+      "notes": [
+        {
+          "keys": [
+            "e/5"
+          ],
+          "duration": "q",
+          "accidentals": {
+            "0": "b"
+          }
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "qr"
+        },
+        {
+          "keys": [
+            "b/4"
+          ],
+          "duration": "hr"
+        }
+      ],
+      "chord": "C-△7"
+    }
+  ]
+}

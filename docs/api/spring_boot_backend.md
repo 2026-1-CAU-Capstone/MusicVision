@@ -80,7 +80,20 @@ Representative payload:
   "measure_alignment": {
     "status": "aligned",
     "musicxml_measure_count": 45,
-    "visual_measure_count": 45
+    "visual_measure_count": 45,
+    "musicxml_system_count": 8,
+    "visual_system_count": 8,
+    "aligned_system_count": 8,
+    "mismatched_system_count": 0,
+    "system_alignment": [
+      {
+        "visual_system_index": 1,
+        "musicxml_system_index": 1,
+        "status": "aligned",
+        "musicxml_measure_count": 5,
+        "visual_measure_count": 5
+      }
+    ]
   },
   "pages": [
     {
@@ -119,15 +132,44 @@ Representative payload:
    - `/chord-assignments`
 5. Check:
    ```json
-   "measure_alignment.status": "aligned"
+   "measure_alignment.status"
    ```
-6. Join chord assignments to MusicXML using:
+6. Join chord assignments to MusicXML for measures that have:
    ```json
    "musicxml_measure_number"
    ```
 7. Persist or transform the combined result for the frontend.
 
-## 4. What to do if measures do not align
+Recommended handling:
+
+| Status | Meaning | Backend behavior |
+| --- | --- | --- |
+| `aligned` | all visual systems match MusicXML measure counts | join all measures |
+| `partial` | some systems match and some do not | join measures that have `musicxml_measure_number`; preserve warning metadata |
+| `mismatch` | no safe system-level mapping exists | avoid automatic chord-to-MusicXML pairing |
+
+## 4. What to do if measures do not fully align
+
+If MusicVision returns:
+
+```json
+{
+  "measure_alignment": {
+    "status": "partial"
+  }
+}
+```
+
+do **not** silently join unmatched measures by array index. The result is still
+useful: aligned systems keep `musicxml_measure_number`, and mismatched systems
+should be forwarded as correction targets.
+
+Recommended backend behavior:
+
+- store the result for debugging
+- surface a clear processing warning upstream
+- join only measures that have `musicxml_measure_number`
+- avoid presenting mismatched systems as automatically reliable
 
 If MusicVision returns:
 
@@ -139,13 +181,9 @@ If MusicVision returns:
 }
 ```
 
-do **not** silently join measures by array index.
-
-Recommended backend behavior:
-
-- store the result for debugging
-- surface a clear processing warning/error upstream
-- avoid presenting chord-to-measure pairing as reliable for that job
+avoid automatic chord-to-MusicXML pairing for that job, but still consider
+returning the raw MusicXML and chord-assignment payload so the frontend can show
+or correct what is available.
 
 ## 5. Status endpoint
 

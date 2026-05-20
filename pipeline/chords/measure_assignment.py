@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import cv2
@@ -21,6 +22,14 @@ from pipeline.chords.models import (
 MIN_MEASURE_WIDTH = 12.0
 
 
+@dataclass(frozen=True)
+class SeparatorCandidate:
+    center_x: float
+    width: int
+    height: int
+    area: int
+
+
 def assign_chords_to_measures(
     *,
     tokens: list[ChordToken],
@@ -29,6 +38,7 @@ def assign_chords_to_measures(
     source_path: str,
     time_signature: str = "4/4",
     beats_per_bar: int = 4,
+    expected_measure_counts_by_system: list[int] | None = None,
 ) -> dict[str, Any]:
     if _geometry_is_usable_for_tokens(geometry, tokens):
         page = _build_from_homr_geometry(
@@ -36,6 +46,7 @@ def assign_chords_to_measures(
             geometry=geometry,
             image=image,
             beats_per_bar=beats_per_bar,
+            expected_measure_counts_by_system=expected_measure_counts_by_system,
         )
     else:
         page = _build_from_cv_fallback(
@@ -91,21 +102,31 @@ def _build_from_homr_geometry(
     geometry: dict[str, Any],
     image: np.ndarray,
     beats_per_bar: int,
+    expected_measure_counts_by_system: list[int] | None,
 ) -> dict[str, Any]:
     systems = _systems_from_geometry(geometry["systems"])
     tokens_by_system = _tokens_by_nearest_system(tokens, systems)
     next_measure_index = 1
 
-    for system, system_tokens in zip(systems, tokens_by_system, strict=True):
+    for system_index, (system, system_tokens) in enumerate(
+        zip(systems, tokens_by_system, strict=True),
+    ):
         barline_positions = _barline_x_positions_for_system(system, geometry["barlines"])
-        barline_positions = _recover_missing_barlines_from_image(
-            system=system,
-            barline_positions=barline_positions,
-            image=image,
-        )
         boundaries = _include_leading_system_boundary_if_needed(
             system=system,
             barline_positions=barline_positions,
+        )
+        expected_measure_count = None
+        if (
+            expected_measure_counts_by_system is not None
+            and system_index < len(expected_measure_counts_by_system)
+        ):
+            expected_measure_count = expected_measure_counts_by_system[system_index]
+        boundaries = _recover_missing_barlines_from_image(
+            system=system,
+            boundaries=boundaries,
+            image=image,
+            expected_measure_count=expected_measure_count,
         )
         measures, next_measure_index = _build_measures_from_boundaries(
             system=system,
@@ -342,19 +363,19 @@ def _include_leading_system_boundary_if_needed(
 def _recover_missing_barlines_from_image(
     *,
     system: SystemRow,
-    barline_positions: list[float],
+    boundaries: list[float],
     image: np.ndarray,
+    expected_measure_count: int | None = None,
 ) -> list[float]:
     """
     Recover an occasional missed HOMR barline from the aligned processed image.
 
     This is intentionally conservative: only inspect intervals that are much
-    wider than the surrounding measure widths, and only add one narrow/tall
-    vertical separator when the visual evidence is strong. That keeps HOMR as
-    the main source of truth while repairing clearly incomplete geometry such
-    as the missed interior barline in Airegin's first system.
+    wider than the surrounding measure widths, or intervals in systems where
+    MusicXML says one more measure should exist. In both cases a split still
+    requires a narrow/tall vertical separator in the image.
     """
-    boundaries = sorted(merge_close_values(barline_positions, tol=1.0))
+    boundaries = sorted(merge_close_values(boundaries, tol=1.0))
     substantial_gaps = [
         right - left
         for left, right in zip(boundaries, boundaries[1:])
@@ -364,33 +385,93 @@ def _recover_missing_barlines_from_image(
     if typical_measure_width <= 0:
         return boundaries
 
-    recovered_positions: list[float] = []
+    expected_deficit = 0
+    current_measure_count = max(0, len(boundaries) - 1)
+    if expected_measure_count is not None:
+        expected_deficit = max(0, expected_measure_count - current_measure_count)
+
+    recovery_candidates: list[
+        tuple[tuple[float, float, float], float, SeparatorCandidate]
+    ] = []
     for left, right in zip(boundaries, boundaries[1:]):
         gap = right - left
-        if gap < typical_measure_width * 1.6 or gap > typical_measure_width * 2.5:
+        if not _should_inspect_interval(
+            gap=gap,
+            typical_measure_width=typical_measure_width,
+            expected_deficit=expected_deficit,
+        ):
             continue
 
-        candidates = _vertical_separator_candidates(
+        vertical_candidates = _vertical_separator_candidates(
             image=image,
             system=system,
             left=left,
             right=right,
         )
-        if not candidates:
+        if not vertical_candidates:
             continue
 
-        recovered_positions.append(
-            min(
-                candidates,
-                key=lambda candidate: (
-                    abs((candidate - left) - typical_measure_width)
-                    + abs((right - candidate) - typical_measure_width),
-                    abs(candidate - ((left + right) / 2.0)),
-                ),
+        best_candidate = min(
+            vertical_candidates,
+            key=lambda candidate: _candidate_split_score(
+                candidate=candidate,
+                left=left,
+                right=right,
+                typical_measure_width=typical_measure_width,
             )
         )
+        score = _candidate_split_score(
+            candidate=best_candidate,
+            left=left,
+            right=right,
+            typical_measure_width=typical_measure_width,
+        )
+        recovery_candidates.append((score, best_candidate.center_x, best_candidate))
+
+    if expected_deficit > 0:
+        recovered_positions = [
+            candidate.center_x
+            for _score, _center_x, candidate in sorted(recovery_candidates)[
+                :expected_deficit
+            ]
+        ]
+    else:
+        recovered_positions = [
+            candidate.center_x for _score, _center_x, candidate in recovery_candidates
+        ]
 
     return sorted(merge_close_values([*boundaries, *recovered_positions], tol=1.0))
+
+
+def _should_inspect_interval(
+    *,
+    gap: float,
+    typical_measure_width: float,
+    expected_deficit: int,
+) -> bool:
+    if gap < MIN_MEASURE_WIDTH * 2.0:
+        return False
+
+    if expected_deficit > 0:
+        return typical_measure_width * 1.25 <= gap <= typical_measure_width * 2.75
+
+    return typical_measure_width * 1.6 <= gap <= typical_measure_width * 2.5
+
+
+def _candidate_split_score(
+    *,
+    candidate: SeparatorCandidate,
+    left: float,
+    right: float,
+    typical_measure_width: float,
+) -> tuple[float, float, float]:
+    balance_score = (
+        abs((candidate.center_x - left) - typical_measure_width)
+        + abs((right - candidate.center_x) - typical_measure_width)
+    )
+    strength_bonus = min(float(candidate.area), 500.0) * 0.25
+    midpoint_distance = abs(candidate.center_x - ((left + right) / 2.0))
+    return (balance_score - strength_bonus, balance_score, midpoint_distance)
 
 
 def _vertical_separator_candidates(
@@ -399,7 +480,7 @@ def _vertical_separator_candidates(
     system: SystemRow,
     left: float,
     right: float,
-) -> list[float]:
+) -> list[SeparatorCandidate]:
     if len(image.shape) == 3:
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
     else:
@@ -422,7 +503,7 @@ def _vertical_separator_candidates(
         (vertical > 0).astype(np.uint8),
         8,
     )
-    candidates: list[float] = []
+    candidates: list[SeparatorCandidate] = []
     margin = MIN_MEASURE_WIDTH * 2.0
 
     for label in range(1, label_count):
@@ -433,7 +514,14 @@ def _vertical_separator_candidates(
         center_x = float(x0 + x + (width - 1) / 2.0)
         if center_x - left < margin or right - center_x < margin:
             continue
-        candidates.append(center_x)
+        candidates.append(
+            SeparatorCandidate(
+                center_x=center_x,
+                width=width,
+                height=height,
+                area=_area,
+            )
+        )
 
     return candidates
 

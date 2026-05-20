@@ -8,7 +8,10 @@ from pipeline.chords.overlay import write_chord_assignment_overlay
 from pipeline.chords.token_filters import filter_probable_non_chords, serialize_token
 from pipeline.export import export_chord_assignments_json
 from pipeline.homr_artifacts import load_geometry_json
-from pipeline.musicxml_alignment import annotate_measure_alignment
+from pipeline.musicxml_alignment import (
+    annotate_measure_alignment,
+    read_musicxml_system_measure_counts,
+)
 from pipeline.postprocess import postprocess_omr_output
 from pipeline.preprocess import preprocess_input
 from pipeline.run_homr import run_homr
@@ -39,6 +42,9 @@ def run_omr_pipeline(
     )
     processed_image = load_rgb_image(homr_artifacts.processed_image_path)
     geometry = load_geometry_json(homr_artifacts.geometry_json_path)
+    expected_measure_counts_by_system = read_musicxml_system_measure_counts(
+        homr_artifacts.musicxml_path,
+    )
     chord_tokens, ocr_rejects = extract_chord_tokens_ocr(processed_image)
     chord_tokens, filtered_hits = filter_probable_non_chords(
         tokens=chord_tokens,
@@ -50,6 +56,7 @@ def run_omr_pipeline(
         geometry=geometry,
         image=processed_image,
         source_path=homr_artifacts.processed_image_path.name,
+        expected_measure_counts_by_system=expected_measure_counts_by_system,
     )
     measure_alignment = annotate_measure_alignment(
         chord_result=chord_result,

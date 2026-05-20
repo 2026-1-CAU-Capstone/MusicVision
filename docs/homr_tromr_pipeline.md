@@ -181,10 +181,10 @@ Practical consequences:
 
 - A small measure-count mismatch should be treated as localized uncertainty, not
   a reason to discard the whole job.
-- System-level alignment can preserve trusted measure mappings for systems whose
+- System-level alignment preserves trusted measure mappings for systems whose
   visual and MusicXML measure counts agree.
 - Missing-barline repair can use MusicXML system counts as a constraint, but
-  MusicXML alone does not provide the missing x-coordinate.
+  MusicXML alone does not provide the missing x-coordinate; any split still
+  needs image evidence in `homr_processed.png`.
 - Future optimizations should keep the distinction explicit: visual geometry,
   semantic MusicXML, and alignment metadata are separate artifacts.
-

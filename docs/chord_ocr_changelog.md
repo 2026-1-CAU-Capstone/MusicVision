@@ -670,6 +670,109 @@ Ebmaj7 / F#7
 
 instead of collapsing them into one oversized visual measure.
 
+## 2026-05-21 - Async processing and callback contract
+
+### Problem
+
+`POST /omr/process` ran the full HOMR + chord OCR pipeline before returning.
+That made the API fragile for longer scores because callers had to keep the
+upload request open until every OMR stage finished.
+
+### Fix
+
+Changed the FastAPI endpoint to queue work in a background task:
+
+- upload validation and file persistence still happen in the request path
+- the process response now returns `202 Accepted` with `status: "queued"`
+- job state is written to `job_status.json`
+- the existing status endpoint now reports `queued`, `processing`, `completed`,
+  `failed`, or `not_found`
+- completed status payloads include the MusicXML and chord-assignment artifact
+  paths
+- failed jobs record an error message instead of leaving callers to infer failure
+  from missing artifacts
+
+Added an optional `callback_url` form field. When supplied, MusicVision posts a
+JSON callback after the job reaches `completed` or `failed`. Callback delivery
+errors are stored as `callback_error` on the job status without changing the
+terminal job result.
+
+The existing retrieval endpoints remain unchanged:
+
+```text
+GET /omr/jobs/{job_id}/musicxml
+GET /omr/jobs/{job_id}/chord-assignments
+```
+
+### Verification
+
+Updated the FastAPI tests to cover:
+
+- queued upload response
+- completed job status after the background task runs
+- completion callback payload
+- failed job status and failure callback payload
+- invalid callback URL rejection
+
+Ran:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_api.py
+```
+
+Result: `10 passed`.
+
+## 2026-05-21 - OMR API key and fixed production callback configuration
+
+### Problem
+
+The async callback endpoint accepted a caller-provided `callback_url` in all
+environments. That is useful locally, but in production it lets any authorized
+request choose where MusicVision sends outbound callback traffic. The OMR
+endpoints also did not have an application-level API key gate.
+
+### Fix
+
+Added a small configuration-based security layer:
+
+- `OMR_API_KEY` enables `X-OMR-API-Key` checks on every `/omr/*` endpoint
+- `APP_ENV=prod` fails closed if `OMR_API_KEY` is missing
+- `OMR_CALLBACK_URL` configures the fixed Spring Boot callback URL
+- `OMR_ALLOW_REQUEST_CALLBACK_URL=false` rejects request-supplied callback URLs
+- `OMR_CALLBACK_API_KEY` sends `X-OMR-Callback-API-Key` on outbound callbacks
+
+The default local behavior remains lightweight: when `APP_ENV` is not `prod` and
+`OMR_API_KEY` is empty, the OMR endpoints remain open for development. Request
+callback URLs are allowed by default outside production.
+
+### Documentation
+
+Added:
+
+```text
+docs/api/security.md
+```
+
+and updated the Spring Boot/API docs with the required headers, production
+callback behavior, and error cases.
+
+### Verification
+
+Added FastAPI coverage for:
+
+- rejecting request callback URLs when disabled
+- using the configured callback URL when request callbacks are disabled
+- requiring `X-OMR-API-Key` when `OMR_API_KEY` is configured
+- sending `X-OMR-Callback-API-Key` on outbound callbacks
+
+Ran:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+```
+
+Result: `33 passed`.
+
 ## Progress-by-the-numbers reference
 
 For the consolidated metric history of the Airegin reference score, including

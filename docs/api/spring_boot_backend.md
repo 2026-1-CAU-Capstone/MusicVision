@@ -8,7 +8,11 @@ MusicVision service.
 ```text
 POST /omr/process
 Content-Type: multipart/form-data
+X-OMR-API-Key: <omr-api-key>
 ```
+
+The endpoint is asynchronous. A successful request stores the upload, queues the
+OMR job, and returns `202 Accepted`.
 
 Form fields:
 
@@ -16,32 +20,73 @@ Form fields:
 | --- | --- | --- |
 | `file` | yes | `.png`, `.jpg`, or `.jpeg` only |
 | `job_id` | no | If supplied, use only letters, numbers, `_`, `-`; max 128 chars |
+| `callback_url` | dev only | Absolute `http` or `https` URL to notify when request callbacks are enabled |
 
 Example:
 
 ```bash
-curl -F "file=@score.png" -F "job_id=demo-job" http://localhost:8000/omr/process
+curl -H "X-OMR-API-Key: $OMR_API_KEY" -F "file=@score.png" -F "job_id=demo-job" http://localhost:8000/omr/process
 ```
 
-Current success response:
+Success response:
 
 ```json
 {
   "job_id": "demo-job",
-  "status": "completed",
-  "musicxml_path": "jobs/demo-job/output/score.musicxml",
-  "chord_assignments_path": "jobs/demo-job/output/chord_assignments.json",
-  "message": "OMR processing completed"
+  "status": "queued",
+  "message": "OMR processing queued"
 }
 ```
 
 ### Important
 
-The returned `musicxml_path` and `chord_assignments_path` are **MusicVision-local
-artifact paths**, not frontend URLs.
+In production, Spring Boot should not send `callback_url`. MusicVision should be
+configured with a fixed `OMR_CALLBACK_URL` that points to a Spring Boot callback
+endpoint. Request-supplied callback URLs are intended for development only.
+
+The `musicxml_path` and `chord_assignments_path` returned by status/callback
+payloads are **MusicVision-local artifact paths**, not frontend URLs.
 
 The backend should retrieve the files through the API endpoints below rather than
 depending on MusicVision's filesystem layout.
+
+### Callback payload
+
+When a development `callback_url` is supplied, or when production
+`OMR_CALLBACK_URL` is configured, MusicVision posts a JSON payload after the job
+reaches a terminal state.
+
+When `OMR_CALLBACK_API_KEY` is configured, MusicVision also sends:
+
+```text
+X-OMR-Callback-API-Key: <callback-api-key>
+```
+
+Spring Boot should reject callback requests that do not include the expected
+header value.
+
+Completed example:
+
+```json
+{
+  "job_id": "demo-job",
+  "status": "completed",
+  "message": "OMR processing completed",
+  "musicxml_path": "jobs/demo-job/output/score.musicxml",
+  "chord_assignments_path": "jobs/demo-job/output/chord_assignments.json"
+}
+```
+
+Failed example:
+
+```json
+{
+  "job_id": "demo-job",
+  "status": "failed",
+  "message": "OMR processing failed",
+  "error": "..."
+}
+```
 
 ## 2. Retrieve the outputs
 
@@ -49,6 +94,7 @@ depending on MusicVision's filesystem layout.
 
 ```text
 GET /omr/jobs/{job_id}/musicxml
+X-OMR-API-Key: <omr-api-key>
 ```
 
 Response:
@@ -61,6 +107,7 @@ Content-Type: application/vnd.recordare.musicxml+xml
 
 ```text
 GET /omr/jobs/{job_id}/chord-assignments
+X-OMR-API-Key: <omr-api-key>
 ```
 
 Response:
@@ -125,20 +172,21 @@ Representative payload:
 ## 3. Recommended backend flow
 
 1. Receive the uploaded image from the frontend.
-2. Send it to `POST /omr/process`.
-3. Use the returned `job_id`.
-4. Fetch:
+2. Send it to `POST /omr/process` with `X-OMR-API-Key`.
+3. Store the returned `job_id` and mark the backend job as queued.
+4. Wait for the configured MusicVision callback, or poll `GET /omr/jobs/{job_id}` until it reports `completed` or `failed`.
+5. When completed, fetch:
    - `/musicxml`
    - `/chord-assignments`
-5. Check:
+6. Check:
    ```json
    "measure_alignment.status"
    ```
-6. Join chord assignments to MusicXML for measures that have:
+7. Join chord assignments to MusicXML for measures that have:
    ```json
    "musicxml_measure_number"
    ```
-7. Persist or transform the combined result for the frontend.
+8. Persist or transform the combined result for the frontend.
 
 Recommended handling:
 
@@ -189,6 +237,7 @@ or correct what is available.
 
 ```text
 GET /omr/jobs/{job_id}
+X-OMR-API-Key: <omr-api-key>
 ```
 
 Returns:
@@ -196,27 +245,36 @@ Returns:
 ```json
 {
   "job_id": "demo-job",
-  "status": "completed"
+  "status": "completed",
+  "message": "OMR processing completed",
+  "musicxml_path": "jobs/demo-job/output/score.musicxml",
+  "chord_assignments_path": "jobs/demo-job/output/chord_assignments.json"
 }
 ```
 
 Possible statuses:
 
 ```text
-completed
+queued
 processing
+completed
+failed
 not_found
 ```
 
-The current processing endpoint is synchronous and currently returns only after
-completion, but this endpoint is already available if the backend later wants to
-support polling-oriented workflows.
+If callback delivery fails, the job can still complete; the status payload may
+include `callback_error` for diagnostics.
 
 ## 6. Error cases to handle
 
 | Case | Response |
 | --- | --- |
+| missing or invalid OMR API key | `401` |
+| missing OMR API key config in production | `503` |
 | unsupported upload extension | `400` |
+| invalid `callback_url` | `400` |
+| request `callback_url` disabled in current environment | `400` |
+| missing fixed callback URL config in production | `503` |
 | missing MusicXML | `404` |
 | missing chord assignments | `404` |
 | invalid `job_id` | `400` |

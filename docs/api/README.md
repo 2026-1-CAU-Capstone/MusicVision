@@ -4,6 +4,7 @@ These notes are for the services that consume MusicVision:
 
 - Spring Boot backend integration: [`spring_boot_backend.md`](spring_boot_backend.md)
 - Frontend integration guidance: [`frontend.md`](frontend.md)
+- OMR API security: [`security.md`](security.md)
 
 ## Current API boundary
 
@@ -16,6 +17,14 @@ MusicVision currently accepts raster image uploads only:
 ```
 
 PDF upload is **not** supported by the current endpoint contract.
+
+`POST /omr/process` is asynchronous: it saves the upload, queues the job, and
+returns `202 Accepted`. Callers may poll the job-status endpoint, and callback
+delivery can be configured for completion/failure events.
+
+In production, MusicVision should use a fixed Spring Boot callback URL and API
+keys rather than accepting arbitrary callback URLs from callers. See
+[`security.md`](security.md).
 
 The main outputs are:
 
@@ -55,4 +64,14 @@ POST /omr/process
 GET  /omr/jobs/{job_id}
 GET  /omr/jobs/{job_id}/musicxml
 GET  /omr/jobs/{job_id}/chord-assignments
+```
+
+Job statuses are:
+
+```text
+queued
+processing
+completed
+failed
+not_found
 ```

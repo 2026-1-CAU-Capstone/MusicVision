@@ -17,6 +17,10 @@ MusicVision currently accepts raster image uploads only:
 
 PDF upload is **not** supported by the current endpoint contract.
 
+`POST /omr/process` is asynchronous: it saves the upload, queues the job, and
+returns `202 Accepted`. Callers may pass an optional `callback_url` form field to
+receive a completion/failure callback, or poll the job-status endpoint.
+
 The main outputs are:
 
 | Output | Purpose |
@@ -55,4 +59,14 @@ POST /omr/process
 GET  /omr/jobs/{job_id}
 GET  /omr/jobs/{job_id}/musicxml
 GET  /omr/jobs/{job_id}/chord-assignments
+```
+
+Job statuses are:
+
+```text
+queued
+processing
+completed
+failed
+not_found
 ```

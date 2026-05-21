@@ -670,6 +670,58 @@ Ebmaj7 / F#7
 
 instead of collapsing them into one oversized visual measure.
 
+## 2026-05-21 - Async processing and callback contract
+
+### Problem
+
+`POST /omr/process` ran the full HOMR + chord OCR pipeline before returning.
+That made the API fragile for longer scores because callers had to keep the
+upload request open until every OMR stage finished.
+
+### Fix
+
+Changed the FastAPI endpoint to queue work in a background task:
+
+- upload validation and file persistence still happen in the request path
+- the process response now returns `202 Accepted` with `status: "queued"`
+- job state is written to `job_status.json`
+- the existing status endpoint now reports `queued`, `processing`, `completed`,
+  `failed`, or `not_found`
+- completed status payloads include the MusicXML and chord-assignment artifact
+  paths
+- failed jobs record an error message instead of leaving callers to infer failure
+  from missing artifacts
+
+Added an optional `callback_url` form field. When supplied, MusicVision posts a
+JSON callback after the job reaches `completed` or `failed`. Callback delivery
+errors are stored as `callback_error` on the job status without changing the
+terminal job result.
+
+The existing retrieval endpoints remain unchanged:
+
+```text
+GET /omr/jobs/{job_id}/musicxml
+GET /omr/jobs/{job_id}/chord-assignments
+```
+
+### Verification
+
+Updated the FastAPI tests to cover:
+
+- queued upload response
+- completed job status after the background task runs
+- completion callback payload
+- failed job status and failure callback payload
+- invalid callback URL rejection
+
+Ran:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_api.py
+```
+
+Result: `10 passed`.
+
 ## Progress-by-the-numbers reference
 
 For the consolidated metric history of the Airegin reference score, including

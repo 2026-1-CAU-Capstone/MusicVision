@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 import pipeline.run_homr as run_homr_module
+import app.api.endpoints.omr as omr_endpoint
 import app.services.omr_service as omr_service
 
 
@@ -104,25 +105,53 @@ def test_process_omr_creates_outputs(
             ],
         },
     )
+    callbacks: list[tuple[str, dict[str, object]]] = []
+
+    def fake_post_job_callback(
+        callback_url: str,
+        payload: dict[str, object],
+    ) -> None:
+        callbacks.append((callback_url, payload))
+
+    monkeypatch.setattr(omr_endpoint, "_post_job_callback", fake_post_job_callback)
 
     response = client.post(
         "/omr/process",
-        data={"job_id": "demo-job"},
+        data={
+            "job_id": "demo-job",
+            "callback_url": "https://backend.example/omr-callbacks",
+        },
         files={"file": ("../../score.png", BytesIO(b"fake-image"), "image/png")},
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     assert response.json() == {
         "job_id": "demo-job",
-        "status": "completed",
-        "musicxml_path": "jobs/demo-job/output/score.musicxml",
-        "chord_assignments_path": "jobs/demo-job/output/chord_assignments.json",
-        "message": "OMR processing completed",
+        "status": "queued",
+        "message": "OMR processing queued",
     }
 
     completed = client.get("/omr/jobs/demo-job")
     assert completed.status_code == 200
-    assert completed.json() == {"job_id": "demo-job", "status": "completed"}
+    assert completed.json() == {
+        "job_id": "demo-job",
+        "status": "completed",
+        "message": "OMR processing completed",
+        "musicxml_path": "jobs/demo-job/output/score.musicxml",
+        "chord_assignments_path": "jobs/demo-job/output/chord_assignments.json",
+    }
+    assert callbacks == [
+        (
+            "https://backend.example/omr-callbacks",
+            {
+                "job_id": "demo-job",
+                "status": "completed",
+                "message": "OMR processing completed",
+                "musicxml_path": "jobs/demo-job/output/score.musicxml",
+                "chord_assignments_path": "jobs/demo-job/output/chord_assignments.json",
+            },
+        )
+    ]
 
     chord_assignments_payload = client.get("/omr/jobs/demo-job/chord-assignments")
     assert chord_assignments_payload.status_code == 200
@@ -175,6 +204,74 @@ def test_process_omr_rejects_unsupported_extensions(client: TestClient) -> None:
     }
 
 
+def test_process_omr_rejects_invalid_callback_url(client: TestClient) -> None:
+    response = client.post(
+        "/omr/process",
+        data={"callback_url": "not-a-url"},
+        files={"file": ("score.png", BytesIO(b"fake-image"), "image/png")},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "callback_url must be an absolute http(s) URL."
+    }
+
+
+def test_process_omr_records_failed_background_job(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run_omr_pipeline(**_kwargs) -> None:
+        raise RuntimeError("pipeline failed")
+
+    callbacks: list[tuple[str, dict[str, object]]] = []
+
+    def fake_post_job_callback(
+        callback_url: str,
+        payload: dict[str, object],
+    ) -> None:
+        callbacks.append((callback_url, payload))
+
+    monkeypatch.setattr(omr_endpoint, "run_omr_pipeline", fake_run_omr_pipeline)
+    monkeypatch.setattr(omr_endpoint, "_post_job_callback", fake_post_job_callback)
+
+    response = client.post(
+        "/omr/process",
+        data={
+            "job_id": "failed-job",
+            "callback_url": "https://backend.example/omr-callbacks",
+        },
+        files={"file": ("score.png", BytesIO(b"fake-image"), "image/png")},
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "job_id": "failed-job",
+        "status": "queued",
+        "message": "OMR processing queued",
+    }
+
+    failed = client.get("/omr/jobs/failed-job")
+    assert failed.status_code == 200
+    assert failed.json() == {
+        "job_id": "failed-job",
+        "status": "failed",
+        "message": "OMR processing failed",
+        "error": "pipeline failed",
+    }
+    assert callbacks == [
+        (
+            "https://backend.example/omr-callbacks",
+            {
+                "job_id": "failed-job",
+                "status": "failed",
+                "message": "OMR processing failed",
+                "error": "pipeline failed",
+            },
+        )
+    ]
+
+
 def test_job_status_reports_processing_and_missing(client: TestClient, tmp_path) -> None:
     processing_job_dir = tmp_path / "jobs" / "pending-job"
     processing_job_dir.mkdir(parents=True)
@@ -183,7 +280,11 @@ def test_job_status_reports_processing_and_missing(client: TestClient, tmp_path)
     missing = client.get("/omr/jobs/missing-job")
 
     assert processing.status_code == 200
-    assert processing.json() == {"job_id": "pending-job", "status": "processing"}
+    assert processing.json() == {
+        "job_id": "pending-job",
+        "status": "processing",
+        "message": "OMR processing in progress",
+    }
     assert missing.status_code == 200
     assert missing.json() == {"job_id": "missing-job", "status": "not_found"}
 

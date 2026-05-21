@@ -722,6 +722,57 @@ Ran:
 
 Result: `10 passed`.
 
+## 2026-05-21 - OMR API key and fixed production callback configuration
+
+### Problem
+
+The async callback endpoint accepted a caller-provided `callback_url` in all
+environments. That is useful locally, but in production it lets any authorized
+request choose where MusicVision sends outbound callback traffic. The OMR
+endpoints also did not have an application-level API key gate.
+
+### Fix
+
+Added a small configuration-based security layer:
+
+- `OMR_API_KEY` enables `X-OMR-API-Key` checks on every `/omr/*` endpoint
+- `APP_ENV=prod` fails closed if `OMR_API_KEY` is missing
+- `OMR_CALLBACK_URL` configures the fixed Spring Boot callback URL
+- `OMR_ALLOW_REQUEST_CALLBACK_URL=false` rejects request-supplied callback URLs
+- `OMR_CALLBACK_API_KEY` sends `X-OMR-Callback-API-Key` on outbound callbacks
+
+The default local behavior remains lightweight: when `APP_ENV` is not `prod` and
+`OMR_API_KEY` is empty, the OMR endpoints remain open for development. Request
+callback URLs are allowed by default outside production.
+
+### Documentation
+
+Added:
+
+```text
+docs/api/security.md
+```
+
+and updated the Spring Boot/API docs with the required headers, production
+callback behavior, and error cases.
+
+### Verification
+
+Added FastAPI coverage for:
+
+- rejecting request callback URLs when disabled
+- using the configured callback URL when request callbacks are disabled
+- requiring `X-OMR-API-Key` when `OMR_API_KEY` is configured
+- sending `X-OMR-Callback-API-Key` on outbound callbacks
+
+Ran:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+```
+
+Result: `33 passed`.
+
 ## Progress-by-the-numbers reference
 
 For the consolidated metric history of the Airegin reference score, including

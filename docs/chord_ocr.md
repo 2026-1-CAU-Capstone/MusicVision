@@ -400,8 +400,12 @@ POST /omr/process
 ```
 
 The upload response returns `202 Accepted` with a queued `job_id`. Callers can
-poll `GET /omr/jobs/{job_id}` or pass a `callback_url` form field to receive a
+poll `GET /omr/jobs/{job_id}` or use the configured callback flow to receive a
 completion/failure callback.
+
+The OMR endpoints can require `X-OMR-API-Key`. Production should use a fixed
+Spring Boot callback URL rather than request-supplied callback URLs. See
+[`api/security.md`](api/security.md) for the security configuration.
 
 Existing MusicXML retrieval remains unchanged:
 

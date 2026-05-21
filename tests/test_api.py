@@ -217,6 +217,126 @@ def test_process_omr_rejects_invalid_callback_url(client: TestClient) -> None:
     }
 
 
+def test_process_omr_rejects_request_callback_when_disabled(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(omr_endpoint, "OMR_ALLOW_REQUEST_CALLBACK_URL", False)
+    monkeypatch.setattr(
+        omr_endpoint,
+        "OMR_CALLBACK_URL",
+        "https://backend.example/fixed-omr-callback",
+    )
+
+    response = client.post(
+        "/omr/process",
+        data={"callback_url": "https://requestor.example/omr-callback"},
+        files={"file": ("score.png", BytesIO(b"fake-image"), "image/png")},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "callback_url is not accepted in this environment."
+    }
+
+
+def test_process_omr_uses_configured_callback_when_request_callback_disabled(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run_omr_pipeline(**_kwargs) -> None:
+        raise RuntimeError("pipeline failed")
+
+    callbacks: list[tuple[str, dict[str, object]]] = []
+
+    def fake_post_job_callback(
+        callback_url: str,
+        payload: dict[str, object],
+    ) -> None:
+        callbacks.append((callback_url, payload))
+
+    monkeypatch.setattr(omr_endpoint, "OMR_ALLOW_REQUEST_CALLBACK_URL", False)
+    monkeypatch.setattr(
+        omr_endpoint,
+        "OMR_CALLBACK_URL",
+        "https://backend.example/fixed-omr-callback",
+    )
+    monkeypatch.setattr(omr_endpoint, "run_omr_pipeline", fake_run_omr_pipeline)
+    monkeypatch.setattr(omr_endpoint, "_post_job_callback", fake_post_job_callback)
+
+    response = client.post(
+        "/omr/process",
+        data={"job_id": "fixed-callback-job"},
+        files={"file": ("score.png", BytesIO(b"fake-image"), "image/png")},
+    )
+
+    assert response.status_code == 202
+    assert callbacks == [
+        (
+            "https://backend.example/fixed-omr-callback",
+            {
+                "job_id": "fixed-callback-job",
+                "status": "failed",
+                "message": "OMR processing failed",
+                "error": "pipeline failed",
+            },
+        )
+    ]
+
+
+def test_omr_api_key_is_required_when_configured(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(omr_endpoint, "OMR_API_KEY", "omr-secret")
+
+    unauthorized = client.get("/omr/jobs/missing-job")
+    authorized = client.get(
+        "/omr/jobs/missing-job",
+        headers={"X-OMR-API-Key": "omr-secret"},
+    )
+
+    assert unauthorized.status_code == 401
+    assert unauthorized.json() == {"detail": "Invalid OMR API key."}
+    assert authorized.status_code == 200
+    assert authorized.json() == {"job_id": "missing-job", "status": "not_found"}
+
+
+def test_callback_api_key_header_is_sent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_headers: dict[str, str] = {}
+
+    class FakeCallbackResponse:
+        status = 204
+
+        def __enter__(self) -> "FakeCallbackResponse":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_urlopen(
+        request: object,
+        *,
+        timeout: int,
+    ) -> FakeCallbackResponse:
+        assert timeout == 10
+        captured_headers.update(dict(request.header_items()))
+        return FakeCallbackResponse()
+
+    monkeypatch.setattr(omr_endpoint, "OMR_CALLBACK_API_KEY", "callback-secret")
+    monkeypatch.setattr(omr_endpoint.url_request, "urlopen", fake_urlopen)
+
+    callback_error = omr_endpoint._post_job_callback(
+        "https://backend.example/fixed-omr-callback",
+        {"job_id": "demo-job", "status": "completed"},
+    )
+
+    assert callback_error is None
+    assert captured_headers["X-omr-callback-api-key"] == "callback-secret"
+
+
 def test_process_omr_records_failed_background_job(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

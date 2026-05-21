@@ -1,5 +1,6 @@
 import json
 import logging
+import secrets
 from pathlib import Path
 from urllib import error as url_error
 from urllib import request as url_request
@@ -12,6 +13,7 @@ from fastapi import (
     Depends,
     File,
     Form,
+    Header,
     HTTPException,
     Request,
     UploadFile,
@@ -19,7 +21,16 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse
 
-from app.core.config import ALLOWED_EXTENSIONS, BASE_DIR, JOBS_DIR
+from app.core.config import (
+    ALLOWED_EXTENSIONS,
+    APP_ENV,
+    BASE_DIR,
+    JOBS_DIR,
+    OMR_ALLOW_REQUEST_CALLBACK_URL,
+    OMR_API_KEY,
+    OMR_CALLBACK_API_KEY,
+    OMR_CALLBACK_URL,
+)
 from app.schemas.omr import JobStatusResponse, OMRProcessResponse
 from app.services.job_service import (
     create_job_directories,
@@ -32,9 +43,31 @@ from app.services.job_service import (
 from app.services.omr_service import run_omr_pipeline
 
 
-router = APIRouter()
 CHORD_ASSIGNMENTS_FILENAME = "chord_assignments.json"
+OMR_API_KEY_HEADER = "X-OMR-API-Key"
+OMR_CALLBACK_API_KEY_HEADER = "X-OMR-Callback-API-Key"
 logger = logging.getLogger("musicvision.omr")
+
+
+def require_omr_api_key(
+    x_omr_api_key: str | None = Header(default=None, alias=OMR_API_KEY_HEADER),
+) -> None:
+    if not OMR_API_KEY:
+        if APP_ENV == "prod":
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="OMR API key is not configured.",
+            )
+        return
+
+    if not secrets.compare_digest(x_omr_api_key or "", OMR_API_KEY):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid OMR API key.",
+        )
+
+
+router = APIRouter(dependencies=[Depends(require_omr_api_key)])
 
 
 async def log_process_request(request: Request) -> None:
@@ -85,7 +118,7 @@ def process_omr(
 ) -> OMRProcessResponse:
     requested_job_id = job_id or str(uuid4())
     safe_job_id = validate_job_id(requested_job_id)
-    safe_callback_url = _validate_callback_url(callback_url)
+    safe_callback_url = _resolve_callback_url(callback_url)
 
     original_filename = file.filename or ""
     logger.info(
@@ -299,10 +332,14 @@ def _post_job_callback(
     callback_url: str,
     payload: dict[str, object],
 ) -> str | None:
+    headers = {"Content-Type": "application/json"}
+    if OMR_CALLBACK_API_KEY:
+        headers[OMR_CALLBACK_API_KEY_HEADER] = OMR_CALLBACK_API_KEY
+
     request = url_request.Request(
         callback_url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
 
@@ -318,7 +355,41 @@ def _post_job_callback(
     return None
 
 
-def _validate_callback_url(callback_url: str | None) -> str | None:
+def _resolve_callback_url(callback_url: str | None) -> str | None:
+    request_callback_url = _validate_callback_url(
+        callback_url,
+        error_detail="callback_url must be an absolute http(s) URL.",
+    )
+    configured_callback_url = _validate_callback_url(
+        OMR_CALLBACK_URL,
+        error_detail="OMR_CALLBACK_URL must be an absolute http(s) URL.",
+        error_status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
+
+    if OMR_ALLOW_REQUEST_CALLBACK_URL:
+        return request_callback_url or configured_callback_url
+
+    if request_callback_url is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="callback_url is not accepted in this environment.",
+        )
+
+    if APP_ENV == "prod" and configured_callback_url is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="OMR_CALLBACK_URL is not configured.",
+        )
+
+    return configured_callback_url
+
+
+def _validate_callback_url(
+    callback_url: str | None,
+    *,
+    error_detail: str,
+    error_status_code: int = status.HTTP_400_BAD_REQUEST,
+) -> str | None:
     if callback_url is None or not callback_url.strip():
         return None
 
@@ -327,8 +398,8 @@ def _validate_callback_url(callback_url: str | None) -> str | None:
 
     if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="callback_url must be an absolute http(s) URL.",
+            status_code=error_status_code,
+            detail=error_detail,
         )
 
     return trimmed_callback_url

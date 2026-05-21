@@ -12,8 +12,8 @@ uvicorn app.main:app --reload
 ```
 
 The API currently accepts `.png`, `.jpg`, and `.jpeg` inputs. `POST /omr/process`
-queues an OMR job and can optionally notify a supplied `callback_url` when the job
-finishes. Completed jobs produce `.musicxml` output plus a structured
+queues an OMR job and can optionally send a callback when the job finishes.
+Completed jobs produce `.musicxml` output plus a structured
 `chord_assignments.json` containing OCR-read printed chord symbols assigned to
 visual measures.
 Each completed job also writes `chord_assignment_overlay.png`, a diagnostic image
@@ -52,6 +52,13 @@ in:
 
 ```text
 docs/api/
+```
+
+The OMR endpoints can be protected with `X-OMR-API-Key`, and production can use a
+fixed Spring Boot callback URL instead of request-supplied callback URLs. See:
+
+```text
+docs/api/security.md
 ```
 
 Open the API docs at:

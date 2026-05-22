@@ -26,13 +26,17 @@ from app.core.config import (
     APP_ENV,
     BASE_DIR,
     JOBS_DIR,
-    OMR_ALLOW_REQUEST_CALLBACK_URL,
     OMR_API_KEY,
     OMR_CALLBACK_API_KEY,
     OMR_CALLBACK_URL,
 )
-from app.schemas.omr import JobStatusResponse, OMRProcessResponse
+from app.schemas.omr import (
+    JobStatusResponse,
+    OMRProcessQueuedResponse,
+    OMRProcessSyncResponse,
+)
 from app.services.job_service import (
+    JobPaths,
     create_job_directories,
     read_job_status,
     save_upload_file,
@@ -60,6 +64,22 @@ def require_omr_api_key(
             )
         return
 
+    _validate_omr_api_key_header(x_omr_api_key)
+
+
+def require_configured_omr_api_key(
+    x_omr_api_key: str | None = Header(default=None, alias=OMR_API_KEY_HEADER),
+) -> None:
+    if not OMR_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="OMR API key is not configured.",
+        )
+
+    _validate_omr_api_key_header(x_omr_api_key)
+
+
+def _validate_omr_api_key_header(x_omr_api_key: str | None) -> None:
     if not secrets.compare_digest(x_omr_api_key or "", OMR_API_KEY):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -105,20 +125,162 @@ def _describe_form_item(key: str, value: object) -> str:
 
 @router.post(
     "/omr/process",
-    response_model=OMRProcessResponse,
+    response_model=OMRProcessSyncResponse,
+    response_model_exclude_none=True,
+    dependencies=[Depends(log_process_request)],
+)
+def process_omr(
+    file: UploadFile = File(...),
+    job_id: str | None = Form(default=None),
+) -> OMRProcessSyncResponse:
+    safe_job_id, input_file_path, job_paths = _save_omr_upload(
+        file=file,
+        job_id=job_id,
+        callback_url=None,
+    )
+    write_job_status(
+        safe_job_id,
+        status="processing",
+        message="OMR processing in progress",
+    )
+
+    try:
+        pipeline_result = run_omr_pipeline(
+            job_id=safe_job_id,
+            input_file_path=input_file_path,
+            intermediate_dir=job_paths.intermediate_dir,
+            output_dir=job_paths.output_dir,
+            logs_dir=job_paths.logs_dir,
+        )
+    except Exception as exc:
+        logger.exception("OMR processing failed: job_id=%s", safe_job_id)
+        error_message = str(exc) or exc.__class__.__name__
+        write_job_status(
+            safe_job_id,
+            status="failed",
+            message="OMR processing failed",
+            error=error_message,
+        )
+        raise
+
+    musicxml_path = _relative_path(pipeline_result.musicxml_path)
+    chord_assignments_path = _relative_path(pipeline_result.chord_assignments_path)
+    write_job_status(
+        safe_job_id,
+        status="completed",
+        message="OMR processing completed",
+        musicxml_path=musicxml_path,
+        chord_assignments_path=chord_assignments_path,
+    )
+
+    return OMRProcessSyncResponse(
+        job_id=safe_job_id,
+        status="completed",
+        musicxml_path=musicxml_path,
+        chord_assignments_path=chord_assignments_path,
+        message="OMR processing completed",
+    )
+
+
+@router.post(
+    "/omr/dev/process",
+    response_model=OMRProcessQueuedResponse,
     response_model_exclude_none=True,
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(log_process_request)],
 )
-def process_omr(
+def process_omr_dev(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     job_id: str | None = Form(default=None),
     callback_url: str | None = Form(default=None),
-) -> OMRProcessResponse:
+) -> OMRProcessQueuedResponse:
+    safe_callback_url = _validate_callback_url(
+        callback_url,
+        error_detail="callback_url must be an absolute http(s) URL.",
+    )
+    return _queue_omr_job(
+        background_tasks=background_tasks,
+        file=file,
+        job_id=job_id,
+        callback_url=safe_callback_url,
+    )
+
+
+@router.post(
+    "/omr/prod/process",
+    response_model=OMRProcessQueuedResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[
+        Depends(log_process_request),
+        Depends(require_configured_omr_api_key),
+    ],
+)
+def process_omr_prod(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    job_id: str | None = Form(default=None),
+    callback_url: str | None = Form(default=None),
+) -> OMRProcessQueuedResponse:
+    if callback_url is not None and callback_url.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="callback_url is not accepted by the production OMR endpoint.",
+        )
+
+    return _queue_omr_job(
+        background_tasks=background_tasks,
+        file=file,
+        job_id=job_id,
+        callback_url=_resolve_static_callback_url(),
+    )
+
+
+def _queue_omr_job(
+    *,
+    background_tasks: BackgroundTasks,
+    file: UploadFile,
+    job_id: str | None,
+    callback_url: str | None,
+) -> OMRProcessQueuedResponse:
+    safe_job_id, input_file_path, job_paths = _save_omr_upload(
+        file=file,
+        job_id=job_id,
+        callback_url=callback_url,
+    )
+
+    write_job_status(
+        safe_job_id,
+        status="queued",
+        message="OMR processing queued",
+        callback_url=callback_url,
+    )
+    background_tasks.add_task(
+        _run_omr_job,
+        job_id=safe_job_id,
+        input_file_path=input_file_path,
+        intermediate_dir=job_paths.intermediate_dir,
+        output_dir=job_paths.output_dir,
+        logs_dir=job_paths.logs_dir,
+        callback_url=callback_url,
+    )
+
+    return OMRProcessQueuedResponse(
+        job_id=safe_job_id,
+        status="queued",
+        message="OMR processing queued",
+    )
+
+
+def _save_omr_upload(
+    *,
+    file: UploadFile,
+    job_id: str | None,
+    callback_url: str | None,
+) -> tuple[str, Path, JobPaths]:
     requested_job_id = job_id or str(uuid4())
     safe_job_id = validate_job_id(requested_job_id)
-    safe_callback_url = _resolve_callback_url(callback_url)
 
     original_filename = file.filename or ""
     logger.info(
@@ -126,7 +288,7 @@ def process_omr(
         safe_job_id,
         original_filename,
         file.content_type,
-        safe_callback_url,
+        callback_url,
     )
 
     file_suffix = Path(original_filename).suffix.lower()
@@ -145,27 +307,8 @@ def process_omr(
         input_file_path,
         input_file_path.stat().st_size,
     )
-    write_job_status(
-        safe_job_id,
-        status="queued",
-        message="OMR processing queued",
-        callback_url=safe_callback_url,
-    )
-    background_tasks.add_task(
-        _run_omr_job,
-        job_id=safe_job_id,
-        input_file_path=input_file_path,
-        intermediate_dir=job_paths.intermediate_dir,
-        output_dir=job_paths.output_dir,
-        logs_dir=job_paths.logs_dir,
-        callback_url=safe_callback_url,
-    )
 
-    return OMRProcessResponse(
-        job_id=safe_job_id,
-        status="queued",
-        message="OMR processing queued",
-    )
+    return safe_job_id, input_file_path, job_paths
 
 
 @router.get(
@@ -355,27 +498,14 @@ def _post_job_callback(
     return None
 
 
-def _resolve_callback_url(callback_url: str | None) -> str | None:
-    request_callback_url = _validate_callback_url(
-        callback_url,
-        error_detail="callback_url must be an absolute http(s) URL.",
-    )
+def _resolve_static_callback_url() -> str:
     configured_callback_url = _validate_callback_url(
         OMR_CALLBACK_URL,
         error_detail="OMR_CALLBACK_URL must be an absolute http(s) URL.",
         error_status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
     )
 
-    if OMR_ALLOW_REQUEST_CALLBACK_URL:
-        return request_callback_url or configured_callback_url
-
-    if request_callback_url is not None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="callback_url is not accepted in this environment.",
-        )
-
-    if APP_ENV == "prod" and configured_callback_url is None:
+    if configured_callback_url is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="OMR_CALLBACK_URL is not configured.",

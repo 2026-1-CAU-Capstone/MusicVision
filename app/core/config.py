@@ -15,15 +15,6 @@ APP_ENV = os.getenv("APP_ENV", "dev").strip().lower()
 OMR_API_KEY = os.getenv("OMR_API_KEY")
 OMR_CALLBACK_URL = os.getenv("OMR_CALLBACK_URL")
 OMR_CALLBACK_API_KEY = os.getenv("OMR_CALLBACK_API_KEY")
-OMR_ALLOW_REQUEST_CALLBACK_URL = (
-    os.getenv(
-        "OMR_ALLOW_REQUEST_CALLBACK_URL",
-        "false" if APP_ENV == "prod" else "true",
-    )
-    .strip()
-    .lower()
-    in {"1", "true", "yes", "on"}
-)
 
 # HOMR currently consumes raster image files directly. PDF support can be
 # reintroduced once preprocess_input() rasterizes pages before OMR execution.

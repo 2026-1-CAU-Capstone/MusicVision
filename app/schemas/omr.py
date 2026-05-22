@@ -6,7 +6,15 @@ from pydantic import BaseModel
 JobStatus = Literal["queued", "processing", "completed", "failed", "not_found"]
 
 
-class OMRProcessResponse(BaseModel):
+class OMRProcessSyncResponse(BaseModel):
+    job_id: str
+    status: Literal["completed"]
+    musicxml_path: str
+    chord_assignments_path: str
+    message: str
+
+
+class OMRProcessQueuedResponse(BaseModel):
     job_id: str
     status: Literal["queued"]
     message: str

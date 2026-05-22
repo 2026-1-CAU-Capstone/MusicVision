@@ -18,12 +18,23 @@ MusicVision currently accepts raster image uploads only:
 
 PDF upload is **not** supported by the current endpoint contract.
 
-`POST /omr/process` is asynchronous: it saves the upload, queues the job, and
-returns `202 Accepted`. Callers may poll the job-status endpoint, and callback
-delivery can be configured for completion/failure events.
+`POST /omr/process` remains the legacy synchronous endpoint: it saves the upload,
+runs OMR before returning, and responds with completed artifact paths.
 
-In production, MusicVision should use a fixed Spring Boot callback URL and API
-keys rather than accepting arbitrary callback URLs from callers. See
+Async processing is exposed through explicit dev/prod endpoints:
+
+```text
+POST /omr/dev/process
+POST /omr/prod/process
+```
+
+Both async endpoints save the upload, queue the job, and return `202 Accepted`.
+Callers may poll the job-status endpoint, and callback delivery can be used for
+completion/failure events.
+
+In production, Spring Boot should use `POST /omr/prod/process`, which requires a
+fixed Spring Boot callback URL and API keys rather than accepting arbitrary
+callback URLs from callers. See
 [`security.md`](security.md).
 
 The main outputs are:
@@ -60,7 +71,9 @@ the result and surface the mismatched systems as review/correction targets.
 ## Canonical endpoints
 
 ```text
-POST /omr/process
+POST /omr/process              # legacy sync
+POST /omr/dev/process          # async, request callback allowed
+POST /omr/prod/process         # async, fixed callback required
 GET  /omr/jobs/{job_id}
 GET  /omr/jobs/{job_id}/musicxml
 GET  /omr/jobs/{job_id}/chord-assignments

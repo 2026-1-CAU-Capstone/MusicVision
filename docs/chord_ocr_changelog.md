@@ -773,6 +773,50 @@ Ran:
 
 Result: `33 passed`.
 
+## 2026-05-22 - Explicit sync, dev async, and prod async OMR endpoints
+
+### Problem
+
+`POST /omr/process` had changed from the previous synchronous contract to the
+new async contract, which broke callers expecting a completed response with
+artifact paths. The dev/prod callback distinction also lived behind
+environment configuration instead of being visible in the API path.
+
+### Fix
+
+Restored `POST /omr/process` as the legacy synchronous endpoint and added:
+
+```text
+POST /omr/dev/process
+POST /omr/prod/process
+```
+
+The development async endpoint accepts an optional request `callback_url`. The
+production async endpoint rejects request-supplied callback URLs, requires
+`OMR_API_KEY`, and always uses the configured `OMR_CALLBACK_URL`.
+
+Removed `OMR_ALLOW_REQUEST_CALLBACK_URL`; callback policy is now selected by the
+endpoint rather than by an environment flag.
+
+### Verification
+
+Updated FastAPI coverage for:
+
+- legacy synchronous `POST /omr/process`
+- development async callback behavior
+- production async static callback behavior
+- production rejection of request-supplied callback URLs
+- production fail-closed behavior for missing API key or callback config
+
+Ran:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_api.py
+.\.venv\Scripts\python.exe -m pytest
+```
+
+Result: `16 passed`; full suite `35 passed`.
+
 ## Progress-by-the-numbers reference
 
 For the consolidated metric history of the Airegin reference score, including

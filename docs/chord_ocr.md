@@ -393,18 +393,22 @@ incompatible sequences while still preserving usable partial results.
 
 ## API surface
 
-OMR processing is queued asynchronously:
+OMR processing has one legacy synchronous endpoint and two explicit async
+endpoints:
 
 ```text
-POST /omr/process
+POST /omr/process       # legacy sync
+POST /omr/dev/process   # async, request callback allowed
+POST /omr/prod/process  # async, fixed callback required
 ```
 
-The upload response returns `202 Accepted` with a queued `job_id`. Callers can
-poll `GET /omr/jobs/{job_id}` or use the configured callback flow to receive a
-completion/failure callback.
+The async upload responses return `202 Accepted` with a queued `job_id`. Callers
+can poll `GET /omr/jobs/{job_id}` or use the configured callback flow to receive
+a completion/failure callback.
 
-The OMR endpoints can require `X-OMR-API-Key`. Production should use a fixed
-Spring Boot callback URL rather than request-supplied callback URLs. See
+The OMR endpoints can require `X-OMR-API-Key`. Production should call
+`POST /omr/prod/process` with a fixed Spring Boot callback URL rather than
+request-supplied callback URLs. See
 [`api/security.md`](api/security.md) for the security configuration.
 
 Existing MusicXML retrieval remains unchanged:
@@ -425,7 +429,7 @@ For a real local smoke test, run the service and post a bundled sample image:
 
 ```powershell
 uvicorn app.main:app --reload
-curl.exe -F "file=@resources/airegin-miles_davis.png" -F "job_id=manual-e2e-airegin" http://127.0.0.1:8000/omr/process
+curl.exe -F "file=@resources/airegin-miles_davis.png" -F "job_id=manual-e2e-airegin" http://127.0.0.1:8000/omr/dev/process
 curl.exe http://127.0.0.1:8000/omr/jobs/manual-e2e-airegin
 ```
 

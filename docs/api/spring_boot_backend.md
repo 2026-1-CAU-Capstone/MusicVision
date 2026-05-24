@@ -3,7 +3,64 @@
 This is the contract the Spring Boot backend should use when calling the
 MusicVision service.
 
-## 1. Upload an image
+## 1. Choose the upload workflow
+
+MusicVision exposes two async upload endpoints for Spring Boot integration:
+
+| Endpoint | Intended use | Callback behavior |
+| --- | --- | --- |
+| `POST /omr/dev/process` | local/dev integration and callback testing | accepts optional request `callback_url` |
+| `POST /omr/prod/process` | deployed backend integration | rejects request `callback_url`; uses configured `OMR_CALLBACK_URL` |
+
+Both endpoints store the upload, queue the OMR job, and return
+`202 Accepted`. Both also support polling with `GET /omr/jobs/{job_id}`.
+
+### Development async endpoint
+
+```text
+POST /omr/dev/process
+Content-Type: multipart/form-data
+X-OMR-API-Key: <omr-api-key>
+```
+
+Use this endpoint when Spring Boot needs to supply a callback URL per request,
+for example while testing a local callback controller.
+
+Form fields:
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `file` | yes | `.png`, `.jpg`, or `.jpeg` only |
+| `job_id` | no | If supplied, use only letters, numbers, `_`, `-`; max 128 chars |
+| `callback_url` | no | Absolute `http` or `https` URL; if omitted, poll the status endpoint |
+
+Example with callback:
+
+```bash
+curl -H "X-OMR-API-Key: $OMR_API_KEY" -F "file=@score.png" -F "job_id=demo-job" -F "callback_url=http://localhost:8080/omr/callbacks" http://localhost:8000/omr/dev/process
+```
+
+Example without callback:
+
+```bash
+curl -H "X-OMR-API-Key: $OMR_API_KEY" -F "file=@score.png" -F "job_id=demo-job" http://localhost:8000/omr/dev/process
+```
+
+Success response:
+
+```json
+{
+  "job_id": "demo-job",
+  "status": "queued",
+  "message": "OMR processing queued"
+}
+```
+
+When `OMR_API_KEY` is configured, the development endpoint requires
+`X-OMR-API-Key`. In local development, leaving `OMR_API_KEY` empty keeps this
+endpoint open for convenience.
+
+### Production async endpoint
 
 ```text
 POST /omr/prod/process
@@ -11,9 +68,8 @@ Content-Type: multipart/form-data
 X-OMR-API-Key: <omr-api-key>
 ```
 
-This is the production async endpoint. A successful request stores the upload,
-queues the OMR job, and returns `202 Accepted`. It always uses the configured
-static callback URL.
+Use this endpoint for deployed Spring Boot integration. It always uses the
+configured static callback URL.
 
 Form fields:
 
@@ -38,11 +94,14 @@ Success response:
 }
 ```
 
-### Important
+### Callback rules
 
 Spring Boot should not send `callback_url` to the production endpoint.
 MusicVision rejects request-supplied callback URLs there and uses the configured
 `OMR_CALLBACK_URL` that points to a Spring Boot callback endpoint.
+
+Spring Boot may send `callback_url` to the development endpoint. MusicVision
+rejects the value unless it is an absolute `http` or `https` URL.
 
 `POST /omr/process` remains available as a legacy synchronous compatibility
 endpoint. New backend integration should use `POST /omr/prod/process`.
@@ -55,8 +114,10 @@ depending on MusicVision's filesystem layout.
 
 ### Callback payload
 
-When the configured production `OMR_CALLBACK_URL` is present, MusicVision posts a
-JSON payload after the job reaches a terminal state.
+When a callback URL is present, MusicVision posts a JSON payload after the job
+reaches a terminal state. For `/omr/dev/process`, that URL comes from the
+request `callback_url`; for `/omr/prod/process`, it comes from the configured
+`OMR_CALLBACK_URL`.
 
 When `OMR_CALLBACK_API_KEY` is configured, MusicVision also sends:
 
@@ -171,7 +232,25 @@ Representative payload:
 }
 ```
 
-## 3. Recommended backend flow
+## 3. Recommended backend flows
+
+### Development flow
+
+1. Receive the uploaded image from the frontend or a local test client.
+2. Send it to `POST /omr/dev/process` with:
+   - `file`
+   - optional `job_id`
+   - optional `callback_url`
+   - `X-OMR-API-Key` when MusicVision has `OMR_API_KEY` configured
+3. Store the returned `job_id` and mark the backend job as queued.
+4. If `callback_url` was supplied, wait for the MusicVision callback.
+5. If no `callback_url` was supplied, poll `GET /omr/jobs/{job_id}` until it reports `completed` or `failed`.
+6. When completed, fetch:
+   - `/musicxml`
+   - `/chord-assignments`
+7. Apply the alignment handling below before joining chords to MusicXML.
+
+### Production flow
 
 1. Receive the uploaded image from the frontend.
 2. Send it to `POST /omr/prod/process` with `X-OMR-API-Key`.

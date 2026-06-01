@@ -28,6 +28,8 @@ artifacts afterward.
 
 For the internal HOMR boundary between pre-TrOMR visual geometry and post-TrOMR
 MusicXML generation, see [`homr_tromr_pipeline.md`](homr_tromr_pipeline.md).
+For runtime baselines and EasyOCR optimization notes, see
+[`chord_ocr_performance.md`](chord_ocr_performance.md).
 
 ## Why `homr_processed.png` matters
 

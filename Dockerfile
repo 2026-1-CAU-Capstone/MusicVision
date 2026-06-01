@@ -26,17 +26,17 @@ COPY app ./app
 COPY pipeline ./pipeline
 COPY time_sig_cnn ./time_sig_cnn
 
-RUN useradd --create-home --shell /usr/sbin/nologin appuser \
-    && mkdir -p /app/storage /models \
-    && chown -R appuser:appuser /app /models
-
-USER appuser
-
 ARG PRELOAD_HOMR_MODELS=true
 ARG PRELOAD_EASYOCR_MODELS=false
 
 RUN if [ "$PRELOAD_HOMR_MODELS" = "true" ]; then python -m homr.main --init; fi
 RUN if [ "$PRELOAD_EASYOCR_MODELS" = "true" ]; then python -c "import easyocr; easyocr.Reader(['en'], gpu=False)"; fi
+
+RUN useradd --create-home --shell /usr/sbin/nologin appuser \
+    && mkdir -p /app/storage /models \
+    && chown -R appuser:appuser /app /models
+
+USER appuser
 
 EXPOSE 8000
 

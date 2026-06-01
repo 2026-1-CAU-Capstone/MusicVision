@@ -14,7 +14,7 @@ uvicorn app.main:app --reload
 The API currently accepts `.png`, `.jpg`, and `.jpeg` inputs. `POST /omr/process`
 is the legacy synchronous endpoint and returns after OMR completes. Async callers
 should use `POST /omr/dev/process` for request-supplied callbacks or
-`POST /omr/prod/process` for the fixed production callback URL.
+`POST /omr/prod/process` for domain-validated production callbacks.
 Completed jobs produce `.musicxml` output plus a structured
 `chord_assignments.json` containing OCR-read printed chord symbols assigned to
 visual measures.

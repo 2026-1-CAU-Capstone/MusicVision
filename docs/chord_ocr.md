@@ -401,7 +401,7 @@ endpoints:
 ```text
 POST /omr/process       # legacy sync
 POST /omr/dev/process   # async, request callback allowed
-POST /omr/prod/process  # async, fixed callback required
+POST /omr/prod/process  # async, domain-validated callback required
 ```
 
 The async upload responses return `202 Accepted` with a queued `job_id`. Callers
@@ -409,8 +409,8 @@ can poll `GET /omr/jobs/{job_id}` or use the configured callback flow to receive
 a completion/failure callback.
 
 The OMR endpoints can require `X-OMR-API-Key`. Production should call
-`POST /omr/prod/process` with a fixed Spring Boot callback URL rather than
-request-supplied callback URLs. See
+`POST /omr/prod/process` with a request `callback_url` whose host matches the
+configured `OMR_CALLBACK_URL` host. See
 [`api/security.md`](api/security.md) for the security configuration.
 
 Existing MusicXML retrieval remains unchanged:

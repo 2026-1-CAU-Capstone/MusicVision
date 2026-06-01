@@ -285,17 +285,11 @@ def process_omr_prod(
     job_id: str | None = Form(default=None),
     callback_url: str | None = Form(default=None),
 ) -> OMRProcessQueuedResponse:
-    if callback_url is not None and callback_url.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="callback_url is not accepted by the production OMR endpoint.",
-        )
-
     return _queue_omr_job(
         background_tasks=background_tasks,
         file=file,
         job_id=job_id,
-        callback_url=_resolve_static_callback_url(),
+        callback_url=_resolve_prod_callback_url(callback_url),
     )
 
 
@@ -568,7 +562,7 @@ def _post_job_callback(
     return None
 
 
-def _resolve_static_callback_url() -> str:
+def _resolve_configured_callback_url() -> str:
     configured_callback_url = _validate_callback_url(
         OMR_CALLBACK_URL,
         error_detail="OMR_CALLBACK_URL must be an absolute http(s) URL.",
@@ -582,6 +576,33 @@ def _resolve_static_callback_url() -> str:
         )
 
     return configured_callback_url
+
+
+def _resolve_prod_callback_url(callback_url: str | None) -> str:
+    configured_callback_url = _resolve_configured_callback_url()
+    requested_callback_url = _validate_callback_url(
+        callback_url,
+        error_detail="callback_url must be an absolute http(s) URL.",
+    )
+
+    if requested_callback_url is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="callback_url is required by the production OMR endpoint.",
+        )
+
+    configured_host = urlparse(configured_callback_url).hostname
+    requested_host = urlparse(requested_callback_url).hostname
+    if (requested_host or "").lower() != (configured_host or "").lower():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "callback_url host is not allowed. "
+                "It must match the configured OMR_CALLBACK_URL host."
+            ),
+        )
+
+    return requested_callback_url
 
 
 def _validate_callback_url(

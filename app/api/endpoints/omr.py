@@ -34,6 +34,7 @@ from app.schemas.omr import (
     JobStatusResponse,
     OMRProcessQueuedResponse,
     OMRProcessSyncResponse,
+    SheetMusicChordProcessResponse,
 )
 from app.services.job_service import (
     JobPaths,
@@ -44,7 +45,7 @@ from app.services.job_service import (
     validate_job_id,
     write_job_status,
 )
-from app.services.omr_service import run_omr_pipeline
+from app.services.omr_service import run_omr_pipeline, run_sheet_music_chord_pipeline
 
 
 CHORD_ASSIGNMENTS_FILENAME = "chord_assignments.json"
@@ -204,6 +205,67 @@ def process_omr_dev(
         file=file,
         job_id=job_id,
         callback_url=safe_callback_url,
+    )
+
+
+@router.post(
+    "/chords/sheet-music/process",
+    response_model=SheetMusicChordProcessResponse,
+    response_model_exclude_none=True,
+    dependencies=[Depends(log_process_request)],
+)
+def process_sheet_music_chords(
+    file: UploadFile = File(...),
+    job_id: str | None = Form(default=None),
+) -> SheetMusicChordProcessResponse:
+    safe_job_id, input_file_path, job_paths = _save_omr_upload(
+        file=file,
+        job_id=job_id,
+        callback_url=None,
+    )
+    write_job_status(
+        safe_job_id,
+        status="processing",
+        message="Sheet music chord processing in progress",
+    )
+
+    try:
+        pipeline_result = run_sheet_music_chord_pipeline(
+            job_id=safe_job_id,
+            input_file_path=input_file_path,
+            intermediate_dir=job_paths.intermediate_dir,
+            output_dir=job_paths.output_dir,
+            logs_dir=job_paths.logs_dir,
+        )
+    except Exception as exc:
+        logger.exception("Sheet music chord processing failed: job_id=%s", safe_job_id)
+        error_message = str(exc) or exc.__class__.__name__
+        write_job_status(
+            safe_job_id,
+            status="failed",
+            message="Sheet music chord processing failed",
+            error=error_message,
+        )
+        raise
+
+    chord_assignments_path = _relative_path(pipeline_result.chord_assignments_path)
+    chord_assignments = _read_chord_assignments_json(
+        pipeline_result.chord_assignments_path,
+    )
+    write_job_status(
+        safe_job_id,
+        status="completed",
+        message="Sheet music chord processing completed",
+        chord_assignments_path=chord_assignments_path,
+    )
+
+    return SheetMusicChordProcessResponse(
+        job_id=safe_job_id,
+        status="completed",
+        source_type="sheet_music",
+        chord_assignments_path=chord_assignments_path,
+        chord_assignments=chord_assignments,
+        message="Sheet music chord processing completed",
     )
 
 
@@ -396,6 +458,14 @@ def _find_chord_assignments_path(job_dir: Path) -> Path | None:
         return canonical_path
 
     return None
+
+
+def _read_chord_assignments_json(chord_assignments_path: Path) -> dict[str, object]:
+    payload = json.loads(chord_assignments_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("Chord assignments payload must be a JSON object.")
+
+    return payload
 
 
 def _run_omr_job(

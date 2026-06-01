@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -17,6 +17,15 @@ class OMRProcessSyncResponse(BaseModel):
 class OMRProcessQueuedResponse(BaseModel):
     job_id: str
     status: Literal["queued"]
+    message: str
+
+
+class SheetMusicChordProcessResponse(BaseModel):
+    job_id: str
+    status: Literal["completed"]
+    source_type: Literal["sheet_music"]
+    chord_assignments_path: str
+    chord_assignments: dict[str, Any]
     message: str
 
 

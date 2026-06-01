@@ -170,7 +170,7 @@ class DetectionArtifacts:
     multi_staffs: list[MultiStaff]
     processed_image: NDArray
     debug: Debug
-    title_future: Future[str]
+    title_future: Future[str] | None
     bar_line_boxes: list[RotatedBoundingBox]
 
 
@@ -180,6 +180,7 @@ def process_image(
     xml_generator_args: XmlGeneratorArguments,
     geometry_json_path: str | None = None,
     processed_image_path: str | None = None,
+    geometry_only: bool = False,
 ) -> None:
     eprint("Processing " + image_path)
     xml_file = replace_extension(image_path, ".musicxml")
@@ -199,13 +200,32 @@ def process_image(
             title_future.set_result("")
             bar_line_boxes: list[RotatedBoundingBox] = []
         else:
-            detection = detect_staffs_in_image(image_path, config)
+            detection = detect_staffs_in_image(
+                image_path,
+                config,
+                detect_title_text=not geometry_only,
+            )
             multi_staffs = detection.multi_staffs
             image = detection.processed_image
             debug = detection.debug
             title_future = detection.title_future
             bar_line_boxes = detection.bar_line_boxes
         debug_cleanup = debug
+
+        if geometry_only:
+            if geometry_json_path is None and processed_image_path is None:
+                raise InvalidProgramArgumentException(
+                    "--geometry-only requires --geometry-json or --processed-image."
+                )
+            _write_geometry_artifacts(
+                image=image,
+                multi_staffs=multi_staffs,
+                bar_line_boxes=bar_line_boxes,
+                geometry_json_path=geometry_json_path,
+                processed_image_path=processed_image_path,
+            )
+            eprint("Finished geometry detection for " + image_path)
+            return
 
         transformer_config = Config()
         transformer_config.use_gpu_inference = config.use_gpu_inference
@@ -218,7 +238,7 @@ def process_image(
             config=transformer_config,
         )
 
-        title = title_future.result(60)
+        title = title_future.result(60) if title_future is not None else ""
         eprint("Found title:", title)
 
         eprint("Writing XML", result_staffs)
@@ -226,21 +246,13 @@ def process_image(
         xml.write(xml_file)
 
         if geometry_json_path is not None or processed_image_path is not None:
-            geometry_artifact = build_geometry_artifact(
-                processed_image=image,
+            _write_geometry_artifacts(
+                image=image,
                 multi_staffs=multi_staffs,
                 bar_line_boxes=bar_line_boxes,
+                geometry_json_path=geometry_json_path,
+                processed_image_path=processed_image_path,
             )
-            if geometry_json_path is not None:
-                write_geometry_json(
-                    artifact=geometry_artifact,
-                    output_path=geometry_json_path,
-                )
-            if processed_image_path is not None:
-                write_processed_image(
-                    processed_image=image,
-                    output_path=processed_image_path,
-                )
 
         eprint("Finished parsing " + str(len(result_staffs)) + " staves")
         teaser_file = replace_extension(image_path, "_teaser.png")
@@ -261,7 +273,10 @@ def process_image(
 
 
 def detect_staffs_in_image(
-    image_path: str, config: ProcessingConfig
+    image_path: str,
+    config: ProcessingConfig,
+    *,
+    detect_title_text: bool = True,
 ) -> DetectionArtifacts:
     predictions, debug = load_and_preprocess_predictions(
         image_path, config.enable_debug, config.enable_cache, config.use_gpu_inference
@@ -303,7 +318,7 @@ def detect_staffs_in_image(
     )
     if len(staffs) == 0:
         raise Exception("No staffs found")
-    title_future = detect_title(debug, staffs[0])
+    title_future = detect_title(debug, staffs[0]) if detect_title_text else None
     debug.write_bounding_boxes_alternating_colors("staffs", staffs)
 
     brace_dot_img = prepare_brace_dot_image(predictions.symbols, predictions.staff)
@@ -331,6 +346,31 @@ def detect_staffs_in_image(
         title_future=title_future,
         bar_line_boxes=bar_line_boxes,
     )
+
+
+def _write_geometry_artifacts(
+    *,
+    image: NDArray,
+    multi_staffs: list[MultiStaff],
+    bar_line_boxes: list[RotatedBoundingBox],
+    geometry_json_path: str | None,
+    processed_image_path: str | None,
+) -> None:
+    geometry_artifact = build_geometry_artifact(
+        processed_image=image,
+        multi_staffs=multi_staffs,
+        bar_line_boxes=bar_line_boxes,
+    )
+    if geometry_json_path is not None:
+        write_geometry_json(
+            artifact=geometry_artifact,
+            output_path=geometry_json_path,
+        )
+    if processed_image_path is not None:
+        write_processed_image(
+            processed_image=image,
+            output_path=processed_image_path,
+        )
 
 
 def get_all_image_files_in_folder(folder: str) -> list[str]:
@@ -435,6 +475,11 @@ def main() -> None:
         help="Optional path where the exact processed image used for geometry detection should be written.",
     )
     parser.add_argument(
+        "--geometry-only",
+        action="store_true",
+        help="Run visual staff and measure detection, write requested geometry artifacts, and skip MusicXML generation.",
+    )
+    parser.add_argument(
         "--gpu",
         type=GpuSupport,
         choices=list(GpuSupport),
@@ -486,6 +531,7 @@ def main() -> None:
                 xml_generator_args,
                 geometry_json_path=args.geometry_json,
                 processed_image_path=args.processed_image,
+                geometry_only=args.geometry_only,
             )
         except InvalidProgramArgumentException as e:
             eprint(str(e))
@@ -503,6 +549,7 @@ def main() -> None:
                     xml_generator_args,
                     geometry_json_path=args.geometry_json,
                     processed_image_path=args.processed_image,
+                    geometry_only=args.geometry_only,
                 )
                 eprint("Finished", image_file)
             except Exception as e:

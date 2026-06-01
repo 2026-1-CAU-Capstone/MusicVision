@@ -4,7 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from pipeline.homr_artifacts import HomrArtifactPaths
+from pipeline.homr_artifacts import HomrArtifactPaths, HomrGeometryArtifactPaths
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 HOMR_PROJECT_DIR = PROJECT_ROOT / "homr"
@@ -83,6 +83,71 @@ def run_homr(
 
     return HomrArtifactPaths(
         musicxml_path=musicxml_path,
+        geometry_json_path=geometry_json_path,
+        processed_image_path=processed_image_path,
+    )
+
+
+def run_homr_geometry_only(
+    *,
+    preprocessed_input_path: Path,
+    output_dir: Path,
+    logs_dir: Path,
+) -> HomrGeometryArtifactPaths:
+    """
+    Run HOMR only through visual staff/barline detection and return geometry artifacts.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    geometry_json_path = output_dir / "geometry.json"
+    processed_image_path = output_dir / "homr_processed.png"
+    command = [
+        sys.executable,
+        "-m",
+        "homr.main",
+        "--geometry-only",
+        "--geometry-json",
+        str(geometry_json_path.resolve()),
+        "--processed-image",
+        str(processed_image_path.resolve()),
+        str(preprocessed_input_path.resolve()),
+    ]
+    homr_env = os.environ.copy()
+    homr_env["PYTHONUTF8"] = "1"
+    completed = subprocess.run(
+        command,
+        cwd=HOMR_PROJECT_DIR,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=homr_env,
+    )
+
+    log_path = logs_dir / "homr_geometry.log"
+    log_path.write_text(
+        _format_homr_log(command=command, returncode=completed.returncode, completed=completed),
+        encoding="utf-8",
+    )
+
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "HOMR geometry detection failed with exit code "
+            f"{completed.returncode}. See {log_path.name} for details."
+        )
+
+    if not geometry_json_path.exists():
+        raise RuntimeError(
+            "HOMR geometry detection completed without producing geometry.json. "
+            f"Expected {geometry_json_path.name}."
+        )
+    if not processed_image_path.exists():
+        raise RuntimeError(
+            "HOMR geometry detection completed without producing homr_processed.png. "
+            f"Expected {processed_image_path.name}."
+        )
+
+    return HomrGeometryArtifactPaths(
         geometry_json_path=geometry_json_path,
         processed_image_path=processed_image_path,
     )

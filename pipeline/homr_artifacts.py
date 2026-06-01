@@ -13,5 +13,11 @@ class HomrArtifactPaths:
     processed_image_path: Path
 
 
+@dataclass(frozen=True)
+class HomrGeometryArtifactPaths:
+    geometry_json_path: Path
+    processed_image_path: Path
+
+
 def load_geometry_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))

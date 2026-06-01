@@ -10,7 +10,7 @@ MusicVision exposes two async upload endpoints for Spring Boot integration:
 | Endpoint | Intended use | Callback behavior |
 | --- | --- | --- |
 | `POST /omr/dev/process` | local/dev integration and callback testing | accepts optional request `callback_url` |
-| `POST /omr/prod/process` | deployed backend integration | rejects request `callback_url`; uses configured `OMR_CALLBACK_URL` |
+| `POST /omr/prod/process` | deployed backend integration | requires request `callback_url`; host must match configured `OMR_CALLBACK_URL` |
 
 Both endpoints store the upload, queue the OMR job, and return
 `202 Accepted`. Both also support polling with `GET /omr/jobs/{job_id}`.
@@ -68,8 +68,9 @@ Content-Type: multipart/form-data
 X-OMR-API-Key: <omr-api-key>
 ```
 
-Use this endpoint for deployed Spring Boot integration. It always uses the
-configured static callback URL.
+Use this endpoint for deployed Spring Boot integration. It requires a callback
+URL per request, but only accepts callback URLs whose host matches the configured
+`OMR_CALLBACK_URL` host.
 
 Form fields:
 
@@ -77,11 +78,12 @@ Form fields:
 | --- | --- | --- |
 | `file` | yes | `.png`, `.jpg`, or `.jpeg` only |
 | `job_id` | no | If supplied, use only letters, numbers, `_`, `-`; max 128 chars |
+| `callback_url` | yes | Absolute `http` or `https` URL; host must match configured `OMR_CALLBACK_URL` host |
 
 Example:
 
 ```bash
-curl -H "X-OMR-API-Key: $OMR_API_KEY" -F "file=@score.png" -F "job_id=demo-job" http://localhost:8000/omr/prod/process
+curl -H "X-OMR-API-Key: $OMR_API_KEY" -F "file=@score.png" -F "job_id=demo-job" -F "callback_url=https://spring.example/internal/omr/callbacks/demo-job" http://localhost:8000/omr/prod/process
 ```
 
 Success response:
@@ -96,9 +98,9 @@ Success response:
 
 ### Callback rules
 
-Spring Boot should not send `callback_url` to the production endpoint.
-MusicVision rejects request-supplied callback URLs there and uses the configured
-`OMR_CALLBACK_URL` that points to a Spring Boot callback endpoint.
+Spring Boot must send `callback_url` to the production endpoint. MusicVision
+rejects the value unless it is an absolute `http` or `https` URL and its host
+matches the host of the configured `OMR_CALLBACK_URL`.
 
 Spring Boot may send `callback_url` to the development endpoint. MusicVision
 rejects the value unless it is an absolute `http` or `https` URL.
@@ -116,8 +118,8 @@ depending on MusicVision's filesystem layout.
 
 When a callback URL is present, MusicVision posts a JSON payload after the job
 reaches a terminal state. For `/omr/dev/process`, that URL comes from the
-request `callback_url`; for `/omr/prod/process`, it comes from the configured
-`OMR_CALLBACK_URL`.
+request `callback_url`; for `/omr/prod/process`, it also comes from the request
+`callback_url` after host validation against `OMR_CALLBACK_URL`.
 
 When `OMR_CALLBACK_API_KEY` is configured, MusicVision also sends:
 
@@ -253,9 +255,10 @@ Representative payload:
 ### Production flow
 
 1. Receive the uploaded image from the frontend.
-2. Send it to `POST /omr/prod/process` with `X-OMR-API-Key`.
+2. Send it to `POST /omr/prod/process` with `X-OMR-API-Key` and a
+   domain-validated `callback_url`.
 3. Store the returned `job_id` and mark the backend job as queued.
-4. Wait for the configured MusicVision callback, or poll `GET /omr/jobs/{job_id}` until it reports `completed` or `failed`.
+4. Wait for the MusicVision callback, or poll `GET /omr/jobs/{job_id}` until it reports `completed` or `failed`.
 5. When completed, fetch:
    - `/musicxml`
    - `/chord-assignments`
@@ -354,8 +357,9 @@ include `callback_error` for diagnostics.
 | missing OMR API key config for production async | `503` |
 | unsupported upload extension | `400` |
 | invalid `callback_url` | `400` |
-| request `callback_url` sent to production async | `400` |
-| missing fixed callback URL config for production async | `503` |
+| missing production `callback_url` | `400` |
+| production `callback_url` host does not match configured host | `400` |
+| missing callback host config for production async | `503` |
 | missing MusicXML | `404` |
 | missing chord assignments | `404` |
 | invalid `job_id` | `400` |

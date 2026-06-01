@@ -39,9 +39,9 @@ Both async endpoints save the upload, queue the job, and return `202 Accepted`.
 Callers may poll the job-status endpoint, and callback delivery can be used for
 completion/failure events.
 
-In production, Spring Boot should use `POST /omr/prod/process`, which requires a
-fixed Spring Boot callback URL and API keys rather than accepting arbitrary
-callback URLs from callers. See
+In production, Spring Boot should use `POST /omr/prod/process`, which requires
+API keys and a request `callback_url` whose host matches the configured
+`OMR_CALLBACK_URL` host. See
 [`security.md`](security.md).
 
 The main outputs are:
@@ -80,7 +80,7 @@ the result and surface the mismatched systems as review/correction targets.
 ```text
 POST /omr/process              # legacy sync
 POST /omr/dev/process          # async, request callback allowed
-POST /omr/prod/process         # async, fixed callback required
+POST /omr/prod/process         # async, domain-validated callback required
 POST /chords/sheet-music/process
 GET  /omr/jobs/{job_id}
 GET  /omr/jobs/{job_id}/musicxml

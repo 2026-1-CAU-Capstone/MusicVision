@@ -317,7 +317,7 @@ def test_dev_process_omr_rejects_invalid_callback_url(client: TestClient) -> Non
     }
 
 
-def test_prod_process_omr_rejects_request_callback(
+def test_prod_process_omr_rejects_untrusted_callback_host(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -337,11 +337,14 @@ def test_prod_process_omr_rejects_request_callback(
 
     assert response.status_code == 400
     assert response.json() == {
-        "detail": "callback_url is not accepted by the production OMR endpoint."
+        "detail": (
+            "callback_url host is not allowed. "
+            "It must match the configured OMR_CALLBACK_URL host."
+        )
     }
 
 
-def test_prod_process_omr_uses_configured_callback(
+def test_prod_process_omr_uses_domain_validated_request_callback(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -368,14 +371,17 @@ def test_prod_process_omr_uses_configured_callback(
     response = client.post(
         "/omr/prod/process",
         headers={"X-OMR-API-Key": "omr-secret"},
-        data={"job_id": "fixed-callback-job"},
+        data={
+            "job_id": "fixed-callback-job",
+            "callback_url": "https://backend.example/custom-omr-callback",
+        },
         files={"file": ("score.png", BytesIO(b"fake-image"), "image/png")},
     )
 
     assert response.status_code == 202
     assert callbacks == [
         (
-            "https://backend.example/fixed-omr-callback",
+            "https://backend.example/custom-omr-callback",
             {
                 "job_id": "fixed-callback-job",
                 "status": "failed",
@@ -404,6 +410,29 @@ def test_prod_process_omr_requires_api_key_configuration(
 
     assert response.status_code == 503
     assert response.json() == {"detail": "OMR API key is not configured."}
+
+
+def test_prod_process_omr_requires_request_callback_url(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(omr_endpoint, "OMR_API_KEY", "omr-secret")
+    monkeypatch.setattr(
+        omr_endpoint,
+        "OMR_CALLBACK_URL",
+        "https://backend.example/fixed-omr-callback",
+    )
+
+    response = client.post(
+        "/omr/prod/process",
+        headers={"X-OMR-API-Key": "omr-secret"},
+        files={"file": ("score.png", BytesIO(b"fake-image"), "image/png")},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "callback_url is required by the production OMR endpoint."
+    }
 
 
 def test_prod_process_omr_requires_configured_callback(

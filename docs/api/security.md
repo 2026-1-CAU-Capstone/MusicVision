@@ -44,7 +44,8 @@ environment switch.
 
 ### Production
 
-Production should use a fixed callback URL owned by the Spring Boot backend:
+Production should configure the allowed Spring Boot callback host through
+`OMR_CALLBACK_URL`:
 
 ```text
 APP_ENV=prod
@@ -57,11 +58,14 @@ Spring Boot should call:
 POST /omr/prod/process
 ```
 
-This endpoint rejects any submitted `callback_url` form field and always uses
-`OMR_CALLBACK_URL`.
+This endpoint requires a submitted `callback_url` form field. MusicVision
+validates that the request callback URL is absolute `http(s)` and that its host
+matches the host of `OMR_CALLBACK_URL`. The request callback URL is then used as
+the actual callback target.
 
 This prevents callers from making MusicVision post job results to arbitrary
-URLs.
+domains while still allowing different callback paths on the configured backend
+host.
 
 ### Development
 

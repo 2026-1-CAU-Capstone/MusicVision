@@ -4,7 +4,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=8000 \
     EASYOCR_MODULE_PATH=/models/easyocr \
-    TORCH_HOME=/models/torch
+    TORCH_HOME=/models/torch \
+    POETRY_DYNAMIC_VERSIONING_BYPASS=0.1.0
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \

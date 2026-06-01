@@ -1,0 +1,28 @@
+services:
+  musicvision-omr:
+    build:
+      context: .
+      args:
+        PRELOAD_HOMR_MODELS: "true"
+        PRELOAD_EASYOCR_MODELS: "false"
+    container_name: musicvision-omr
+    environment:
+      APP_ENV: ${APP_ENV:-prod}
+      APP_NAME: ${APP_NAME:-MusicVision OMR Service}
+      APP_VERSION: ${APP_VERSION:-0.1.0}
+      OMR_API_KEY: ${OMR_API_KEY:?Set OMR_API_KEY in .env or the shell}
+      OMR_CALLBACK_URL: ${OMR_CALLBACK_URL:?Set OMR_CALLBACK_URL in .env or the shell}
+      OMR_CALLBACK_API_KEY: ${OMR_CALLBACK_API_KEY:-}
+      PORT: "8000"
+      EASYOCR_MODULE_PATH: /models/easyocr
+      TORCH_HOME: /models/torch
+    ports:
+      - "8000:8000"
+    volumes:
+      - musicvision-storage:/app/storage
+      - musicvision-model-cache:/models
+    restart: unless-stopped
+
+volumes:
+  musicvision-storage:
+  musicvision-model-cache:

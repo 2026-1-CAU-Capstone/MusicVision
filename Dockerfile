@@ -10,6 +10,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         curl \
+        libgl1 \
+        libglib2.0-0 \
+        libxcb1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

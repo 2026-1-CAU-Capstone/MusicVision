@@ -18,6 +18,19 @@ should use `POST /omr/dev/process` for request-supplied callbacks or
 Completed jobs produce `.musicxml` output plus a structured
 `chord_assignments.json` containing OCR-read printed chord symbols assigned to
 visual measures.
+
+For callers that only need printed chord symbols from sheet music, use:
+
+```text
+POST /chords/sheet-music/process
+```
+
+This returns the structured chord assignments directly and stores the same
+`chord_assignments.json` artifact. This endpoint runs HOMR only through visual
+geometry detection for staff systems and barlines, then skips TrOMR/MusicXML
+generation. Because no MusicXML is produced, its measure alignment status is
+`visual_only`.
+
 Each completed job also writes `chord_assignment_overlay.png`, a diagnostic image
 showing measure assignment and OCR decisions in the HOMR processed-image coordinate
 space.

@@ -1,4 +1,5 @@
 from io import BytesIO
+import json
 from pathlib import Path
 import subprocess
 
@@ -167,6 +168,128 @@ def test_process_omr_creates_outputs(
     assert (
         tmp_path / "jobs" / "demo-job" / "output" / "chord_assignment_overlay.png"
     ).exists()
+
+
+def test_process_sheet_music_chords_returns_assignments(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run_sheet_music_chord_pipeline(
+        *,
+        job_id: str,
+        input_file_path: Path,
+        intermediate_dir: Path,
+        output_dir: Path,
+        logs_dir: Path,
+    ) -> omr_service.SheetMusicChordPipelineResult:
+        chord_assignments = {
+            "job_id": job_id,
+            "source_file": input_file_path.name,
+            "source_type": "sheet_music",
+            "pipeline": "homr_geometry_only",
+            "measure_alignment": {
+                "status": "visual_only",
+                "musicxml_measure_count": None,
+                "visual_measure_count": 1,
+            },
+            "chord_ocr": {
+                "backend": "easyocr",
+                "accepted_tokens": [
+                    {
+                        "text_raw": "Dm7",
+                        "text_norm": "Dm7",
+                        "bbox": [10.0, 20.0, 40.0, 30.0],
+                        "confidence": 0.91,
+                    }
+                ],
+                "rejected_hits": [],
+                "filtered_hits": [],
+            },
+            "pages": [
+                {
+                    "page": 1,
+                    "assignment_source": "homr_geometry",
+                    "systems": [
+                        {
+                            "index": 1,
+                            "measures": [
+                                {
+                                    "index": 1,
+                                    "chords": [
+                                        {
+                                            "text_raw": "Dm7",
+                                            "text_norm": "Dm7",
+                                            "beat": 1.0,
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        chord_assignments_path = output_dir / "chord_assignments.json"
+        chord_assignments_path.write_text(
+            json.dumps(chord_assignments),
+            encoding="utf-8",
+        )
+
+        return omr_service.SheetMusicChordPipelineResult(
+            chord_assignments_path=chord_assignments_path,
+        )
+
+    monkeypatch.setattr(
+        omr_endpoint,
+        "run_sheet_music_chord_pipeline",
+        fake_run_sheet_music_chord_pipeline,
+    )
+
+    response = client.post(
+        "/chords/sheet-music/process",
+        data={"job_id": "chord-only-job"},
+        files={"file": ("score.png", BytesIO(b"fake-image"), "image/png")},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job_id"] == "chord-only-job"
+    assert payload["status"] == "completed"
+    assert payload["source_type"] == "sheet_music"
+    assert (
+        payload["chord_assignments_path"]
+        == "jobs/chord-only-job/output/chord_assignments.json"
+    )
+    assert payload["message"] == "Sheet music chord processing completed"
+    assert payload["chord_assignments"]["pages"][0]["systems"][0]["measures"][0][
+        "chords"
+    ] == [{"text_raw": "Dm7", "text_norm": "Dm7", "beat": 1.0}]
+    assert payload["chord_assignments"]["pipeline"] == "homr_geometry_only"
+    assert payload["chord_assignments"]["measure_alignment"]["status"] == "visual_only"
+    assert "musicxml_path" not in payload
+
+    completed = client.get("/omr/jobs/chord-only-job")
+    assert completed.status_code == 200
+    assert completed.json() == {
+        "job_id": "chord-only-job",
+        "status": "completed",
+        "message": "Sheet music chord processing completed",
+        "chord_assignments_path": "jobs/chord-only-job/output/chord_assignments.json",
+    }
+
+
+def test_process_sheet_music_chords_rejects_unsupported_extensions(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/chords/sheet-music/process",
+        files={"file": ("score.txt", BytesIO(b"not-supported"), "text/plain")},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "Unsupported file extension. Allowed extensions: .jpeg, .jpg, .png"
+    }
 
 
 def test_process_omr_rejects_unsupported_extensions(client: TestClient) -> None:

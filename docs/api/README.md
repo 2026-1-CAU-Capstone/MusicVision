@@ -21,6 +21,13 @@ PDF upload is **not** supported by the current endpoint contract.
 `POST /omr/process` remains the legacy synchronous endpoint: it saves the upload,
 runs OMR before returning, and responds with completed artifact paths.
 
+`POST /chords/sheet-music/process` is the synchronous chord-only sheet-music
+endpoint. It accepts the same raster image uploads, runs printed chord-symbol OCR
+and measure assignment, returns the structured chord assignments inline, and
+stores `chord_assignments.json`. It runs HOMR visual geometry detection only and
+skips TrOMR/MusicXML generation, so its response does not include a MusicXML path
+and its alignment status is `visual_only`.
+
 Async processing is exposed through explicit dev/prod endpoints:
 
 ```text
@@ -74,6 +81,7 @@ the result and surface the mismatched systems as review/correction targets.
 POST /omr/process              # legacy sync
 POST /omr/dev/process          # async, request callback allowed
 POST /omr/prod/process         # async, fixed callback required
+POST /chords/sheet-music/process
 GET  /omr/jobs/{job_id}
 GET  /omr/jobs/{job_id}/musicxml
 GET  /omr/jobs/{job_id}/chord-assignments

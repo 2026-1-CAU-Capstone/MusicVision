@@ -3,12 +3,19 @@
 MusicVision exposes a separate chord-chart pipeline for Real Book-style chart
 grids. It does not run HOMR and does not produce MusicXML.
 
+For the design and implementation history behind this API, see
+[`chord_chart_processing_changelog.md`](chord_chart_processing_changelog.md).
+For local runtime baselines, see
+[`chord_chart_processing_performance.md`](chord_chart_processing_performance.md).
+
 ```text
 POST /chords/chart/process
+POST /chords/chart/dev/process
+POST /chords/chart/prod/process
 GET  /omr/jobs/{job_id}/chord-chart
 ```
 
-The endpoint accepts raster uploads:
+All chart processing endpoints accept raster uploads:
 
 ```text
 .png
@@ -28,6 +35,15 @@ upload
   -> resolve percent repeats against the previous measure
   -> write chord_chart.json and chord_chart_overlay.png
 ```
+
+`POST /chords/chart/process` runs synchronously and returns the chart payload
+inline. `POST /chords/chart/dev/process` and
+`POST /chords/chart/prod/process` queue the same pipeline and return
+`202 Accepted`; callback completion payloads include `chord_chart_path`.
+
+The dev/prod chart endpoints require `X-OMR-API-Key`. The prod chart endpoint
+also requires a request `callback_url` whose host matches the configured
+`OMR_CALLBACK_URL` host.
 
 ## Supported Chart Features
 
@@ -49,15 +65,15 @@ The chord normalizer accepts common equivalents such as:
 Abm7b5
 Abmin7b5
 Ab-7b5
-Abø7
+Aø7
 Bb△7
-BbΔ7
+Eb-△7
 G-7/F
 Bb6/F
 ```
 
 Those are normalized into everyday linear `text_norm` values such as `Abm7b5`,
-`Bbmaj7`, `Gm7/F`, and `Bb6/F`.
+`Am7b5`, `Bbmaj7`, `EbmMaj7`, `Gm7/F`, and `Bb6/F`.
 
 ## Payload Shape
 

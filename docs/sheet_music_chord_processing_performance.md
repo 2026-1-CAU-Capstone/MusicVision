@@ -1,9 +1,9 @@
-# Chord OCR Performance Notes
+# Sheet Music Chord Processing Performance Notes
 
 This document tracks runtime observations and optimization targets for printed
 chord-symbol OCR. It is intentionally separate from
-`docs/chord_ocr_changelog.md`, which should remain focused on implementation
-history.
+`docs/sheet_music_chord_processing_changelog.md`, which should remain focused on
+implementation history.
 
 ## 2026-06-01 baseline
 

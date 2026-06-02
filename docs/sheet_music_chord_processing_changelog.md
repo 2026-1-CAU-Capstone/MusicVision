@@ -1,7 +1,8 @@
-# Printed Chord OCR Changelog
+# Sheet Music Chord Processing Changelog
 
-This file records the implementation changes made for the printed chord OCR
-branch in more detail than the architectural summary in `docs/chord_ocr.md`.
+This file records the implementation changes made for the sheet-music chord
+processing branch in more detail than the architectural summary in
+`docs/sheet_music_chord_processing.md`.
 
 ## 2026-05-18 - Initial image-based integration
 
@@ -824,5 +825,5 @@ the initial `36`-measure / `35-of-43` chord baseline and the current
 `45`-measure / `39-of-43` state, see:
 
 ```text
-docs/chord_ocr_progress_metrics.md
+docs/sheet_music_chord_processing_progress_metrics.md
 ```

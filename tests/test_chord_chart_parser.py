@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 
 from pipeline.chord_charts.ocr_backend import OCRToken
-from pipeline.chord_charts.parser import parse_chord_chart_image
+from pipeline.chord_charts.parser import Boundary, ChartRow, parse_chord_chart_image
 
 
 def test_chord_chart_parser_handles_grid_symbols_and_flow() -> None:
@@ -69,3 +69,114 @@ def test_chord_chart_parser_handles_grid_symbols_and_flow() -> None:
     ]
     assert payload["flow"]["navigation"][0]["type"] == "fine"
     assert payload["chart_ocr"]["detected_symbols"][-1]["type"] == "dc_al_ending"
+
+
+def test_chord_chart_parser_recovers_fragmented_quality_and_stacked_bass() -> None:
+    image = np.full((300, 430, 3), 255, dtype=np.uint8)
+    cv2.line(image, (105, 196), (135, 150), (0, 0, 0), 5)
+    rows = [
+        ChartRow(
+            index=1,
+            y_top=100,
+            y_bottom=200,
+            boundaries=[
+                Boundary(50, 100, 200, 1),
+                Boundary(200, 100, 200, 1),
+                Boundary(380, 100, 200, 1),
+            ],
+        )
+    ]
+    tokens = [
+        OCRToken("Bp", (74, 116, 122, 180), 0.91, source="cell_ocr"),
+        OCRToken("6", (118, 136, 138, 160), 0.92, source="cell_ocr"),
+        OCRToken("e", (106, 166, 126, 228), 0.77, source="cell_ocr"),
+        OCRToken("A", (224, 118, 274, 176), 0.95, source="cell_ocr"),
+        OCRToken("U/", (266, 146, 292, 166), 0.48, source="cell_ocr"),
+    ]
+
+    payload = parse_chord_chart_image(
+        image=image,
+        tokens=tokens,
+        ocr_rejects=[],
+        job_id="chart-job",
+        source_file="chart.png",
+        rows=rows,
+    )
+
+    measures = payload["pages"][0]["systems"][0]["measures"]
+    assert measures[0]["chords"][0]["text_norm"] == "Bb6/F"
+    assert measures[1]["chords"][0]["text_norm"] == "Am7"
+
+
+def test_chord_chart_parser_uses_rootless_minor_fragments_as_context() -> None:
+    image = np.full((300, 500, 3), 255, dtype=np.uint8)
+    cv2.line(image, (405, 196), (435, 150), (0, 0, 0), 5)
+    rows = [
+        ChartRow(
+            index=1,
+            y_top=100,
+            y_bottom=200,
+            boundaries=[
+                Boundary(50, 100, 200, 1),
+                Boundary(250, 100, 200, 1),
+                Boundary(470, 100, 200, 1),
+            ],
+        )
+    ]
+    tokens = [
+        OCRToken("D-7", (82, 118, 150, 166), 0.94, source="cell_ocr"),
+        OCRToken("0-7", (86, 120, 148, 168), 0.41, source="cell_ocr"),
+        OCRToken("G61", (278, 118, 348, 168), 0.42, source="cell_ocr"),
+        OCRToken("0-7", (282, 120, 344, 168), 0.38, source="cell_ocr"),
+        OCRToken("0-", (398, 122, 440, 164), 0.44, source="cell_ocr"),
+        OCRToken("F", (408, 168, 430, 224), 0.88, source="cell_ocr"),
+    ]
+
+    payload = parse_chord_chart_image(
+        image=image,
+        tokens=tokens,
+        ocr_rejects=[],
+        job_id="chart-job",
+        source_file="chart.png",
+        rows=rows,
+    )
+
+    measures = payload["pages"][0]["systems"][0]["measures"]
+    assert [chord["text_norm"] for chord in measures[0]["chords"]] == ["Dm7"]
+    assert [chord["text_norm"] for chord in measures[1]["chords"]] == [
+        "Gm7",
+        "Gm7/F",
+    ]
+
+
+def test_chord_chart_parser_does_not_promote_dc_al_fragment_to_chord() -> None:
+    image = np.full((300, 360, 3), 255, dtype=np.uint8)
+    rows = [
+        ChartRow(
+            index=1,
+            y_top=100,
+            y_bottom=200,
+            boundaries=[
+                Boundary(50, 100, 200, 1),
+                Boundary(310, 100, 200, 1),
+            ],
+        )
+    ]
+    tokens = [
+        OCRToken("D.C.", (70, 205, 120, 226), 0.91, source="cell_ocr"),
+        OCRToken("a", (126, 205, 138, 226), 0.72, source="cell_ocr"),
+        OCRToken("2nd ending", (145, 205, 250, 226), 0.88, source="cell_ocr"),
+    ]
+
+    payload = parse_chord_chart_image(
+        image=image,
+        tokens=tokens,
+        ocr_rejects=[],
+        job_id="chart-job",
+        source_file="chart.png",
+        rows=rows,
+    )
+
+    measure = payload["pages"][0]["systems"][0]["measures"][0]
+    assert measure["navigation"][0]["type"] == "dc"
+    assert measure["chords"] == []

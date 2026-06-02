@@ -44,6 +44,7 @@ class MeasureCell:
     chords: list[dict[str, Any]] = field(default_factory=list)
     symbols: list[dict[str, Any]] = field(default_factory=list)
     navigation: list[dict[str, Any]] = field(default_factory=list)
+    ocr_tokens: list[OCRToken] = field(default_factory=list)
 
 
 def parse_chord_chart_image(
@@ -137,6 +138,8 @@ def parse_chord_chart_image(
                 {**token.to_dict(), "reason": "outside detected measure cells"}
             )
             continue
+        if token.source.startswith("cell_ocr"):
+            measure.ocr_tokens.append(token)
 
         navigation = _parse_navigation(token)
         if navigation is not None:
@@ -152,7 +155,7 @@ def parse_chord_chart_image(
             detected_symbols.append(navigation)
             continue
 
-        if has_cell_tokens and token.source != "cell_ocr":
+        if has_cell_tokens and not token.source.startswith("cell_ocr"):
             continue
 
         repeat_symbol = _parse_repeat_symbol(token)
@@ -208,8 +211,13 @@ def parse_chord_chart_image(
         row = rows[measure.row_index - 1]
         if row.ending_number is not None:
             measure.ending_number = row.ending_number
+        _remove_navigation_fragment_chords(measure)
+        _apply_ocr_context_to_measure(measure)
+        _infer_repeated_rootless_minor_chords(measure, beats_per_bar=beats_per_bar)
         _merge_slash_bass_symbols(measure)
-        _merge_vertical_bass_chords(measure)
+        _merge_vertical_bass_chords(measure, image=image)
+        _propagate_same_root_extensions(measure)
+        _deduplicate_measure_chords(measure)
         visual_repeat = _detect_visual_percent_repeat(image, measure)
         if visual_repeat is not None and not any(
             symbol.get("type") == "repeat_previous_measure"
@@ -665,6 +673,7 @@ def _expand_chart_tokens(tokens: list[OCRToken]) -> list[OCRToken]:
                     text=part,
                     bbox=(cursor, y0, cursor + part_width, y1),
                     confidence=token.confidence,
+                    source=token.source,
                 )
             )
             cursor += part_width
@@ -831,26 +840,25 @@ def _merge_slash_bass_symbols(measure: MeasureCell) -> None:
             _attach_bass_to_chord(target, str(symbol["bass"]), str(symbol["text_raw"]))
 
 
-def _merge_vertical_bass_chords(measure: MeasureCell) -> None:
+def _merge_vertical_bass_chords(measure: MeasureCell, *, image: np.ndarray) -> None:
     if len(measure.chords) < 2:
         return
 
     row_y0, row_y1 = measure.bbox[1], measure.bbox[3]
-    lower_threshold = row_y0 + (row_y1 - row_y0) * 0.62
+    has_visual_slash = _has_visual_slash_in_measure(image, measure)
     to_remove: set[int] = set()
 
     for index, chord in enumerate(measure.chords):
-        components = chord.get("components") or {}
-        if components.get("quality") != "major":
+        bass = _bass_root_from_lower_chord(
+            chord,
+            measure=measure,
+            has_visual_slash=has_visual_slash,
+        )
+        if bass is None:
             continue
-        if components.get("extensions") or components.get("alterations") or components.get("bass"):
-            continue
-
         chord_bbox = chord.get("bbox") or [0, 0, 0, 0]
         chord_cx = (float(chord_bbox[0]) + float(chord_bbox[2])) / 2.0
         chord_cy = (float(chord_bbox[1]) + float(chord_bbox[3])) / 2.0
-        if chord_cy < lower_threshold:
-            continue
 
         candidates: list[tuple[float, int, dict[str, Any]]] = []
         for target_index, target in enumerate(measure.chords):
@@ -867,8 +875,10 @@ def _merge_vertical_bass_chords(measure: MeasureCell) -> None:
             continue
 
         distance, _target_index, target = min(candidates, key=lambda item: item[0])
-        if distance <= max(45.0, (measure.bbox[2] - measure.bbox[0]) * 0.22):
-            bass = f"{components['root']}{components.get('accidental') or ''}"
+        max_distance = max(45.0, (measure.bbox[2] - measure.bbox[0]) * 0.22)
+        if has_visual_slash:
+            max_distance = max(max_distance, (measure.bbox[2] - measure.bbox[0]) * 0.34)
+        if distance <= max_distance:
             _attach_bass_to_chord(target, bass, str(chord["text_raw"]))
             to_remove.add(index)
 
@@ -887,6 +897,474 @@ def _attach_bass_to_chord(
     chord["text_raw"] = f"{chord['text_raw']}/{raw_bass_text.lstrip('/')}"
     chord["text_norm"] = f"{chord['text_norm'].split('/')[0]}/{bass}"
     chord["text_display"] = chord["text_raw"]
+
+
+def _remove_navigation_fragment_chords(measure: MeasureCell) -> None:
+    if not measure.chords or not any(
+        _raw_has_navigation_context(token.text) for token in measure.ocr_tokens
+    ):
+        return
+
+    measure.chords = [
+        chord
+        for chord in measure.chords
+        if not _is_lower_navigation_a_chord(chord, measure)
+    ]
+
+
+def _is_lower_navigation_a_chord(
+    chord: dict[str, Any],
+    measure: MeasureCell,
+) -> bool:
+    raw = str(chord.get("text_raw") or "").strip()
+    if raw not in {"a", "a/a"}:
+        return False
+
+    components = chord.get("components") or {}
+    if components.get("root") != "A" or components.get("accidental") is not None:
+        return False
+    if components.get("quality") != "major":
+        return False
+    if components.get("extensions") or components.get("alterations"):
+        return False
+
+    chord_bbox = chord.get("bbox") or [0, 0, 0, 0]
+    chord_cy = (float(chord_bbox[1]) + float(chord_bbox[3])) / 2.0
+    lower_navigation_y = measure.bbox[1] + (measure.bbox[3] - measure.bbox[1]) * 0.74
+    return chord_cy >= lower_navigation_y
+
+
+def _raw_has_navigation_context(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text.strip().lower())
+    return (
+        compact.startswith(("d.c", "dc"))
+        or "ending" in compact
+        or compact in {"fine", "al", "1st", "2nd", "3rd", "4th"}
+    )
+
+
+def _bass_root_from_lower_chord(
+    chord: dict[str, Any],
+    *,
+    measure: MeasureCell,
+    has_visual_slash: bool,
+) -> str | None:
+    if not _is_lower_bass_chord_candidate(chord, measure):
+        return None
+
+    components = chord.get("components") or {}
+    raw = str(chord.get("text_raw") or "").strip()
+    raw_compact = raw.replace("\u266d", "b").replace("\ue260", "b")
+    raw_compact = raw_compact.replace("\u266f", "#").replace("\ue262", "#")
+
+    if has_visual_slash and raw == "e" and components.get("root") == "E":
+        return "F"
+    if not re.fullmatch(r"[A-Ga-g](?:[#b])?", raw_compact):
+        return None
+
+    return f"{components['root']}{components.get('accidental') or ''}"
+
+
+def _is_lower_bass_chord_candidate(
+    chord: dict[str, Any],
+    measure: MeasureCell,
+) -> bool:
+    components = chord.get("components") or {}
+    if components.get("quality") != "major":
+        return False
+    if components.get("extensions") or components.get("alterations") or components.get("bass"):
+        return False
+
+    chord_bbox = chord.get("bbox") or [0, 0, 0, 0]
+    chord_cy = (float(chord_bbox[1]) + float(chord_bbox[3])) / 2.0
+    lower_threshold = measure.bbox[1] + (measure.bbox[3] - measure.bbox[1]) * 0.62
+    if chord_cy < lower_threshold:
+        return False
+
+    raw = str(chord.get("text_raw") or "").strip()
+    raw_compact = raw.replace("\u266d", "b").replace("\ue260", "b")
+    raw_compact = raw_compact.replace("\u266f", "#").replace("\ue262", "#")
+    return bool(re.fullmatch(r"[A-Ga-g](?:[#b])?", raw_compact) or raw == "e")
+
+
+def _has_visual_slash_in_measure(image: np.ndarray, measure: MeasureCell) -> bool:
+    x0, y0, x1, y1 = [int(round(value)) for value in measure.bbox]
+    height = max(1, y1 - y0)
+    y0 = int(max(0, y0 + height * 0.32))
+    y1 = int(min(image.shape[0], y1 + height * 0.42))
+    x0 = int(max(0, x0 + 4))
+    x1 = int(min(image.shape[1], x1 - 4))
+    if x1 <= x0 or y1 <= y0:
+        return False
+
+    crop = image[y0:y1, x0:x1]
+    gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    lines = cv2.HoughLinesP(
+        binary,
+        rho=1,
+        theta=np.pi / 180.0,
+        threshold=22,
+        minLineLength=max(24, int(min(binary.shape[:2]) * 0.18)),
+        maxLineGap=10,
+    )
+    if lines is None:
+        return False
+
+    for line in lines[:, 0]:
+        lx0, ly0, lx1, ly1 = [float(value) for value in line]
+        dx = lx1 - lx0
+        if dx == 0:
+            continue
+        angle = np.degrees(np.arctan2(ly1 - ly0, dx))
+        if -75.0 <= angle <= -20.0:
+            return True
+    return False
+
+
+def _apply_ocr_context_to_measure(measure: MeasureCell) -> None:
+    if not measure.chords:
+        return
+
+    for group in _chord_groups(measure):
+        chords = group["chords"]
+        tokens = group["tokens"]
+        if not chords:
+            continue
+
+        context_chords = [
+            chord for chord in chords if not _is_lower_bass_chord_candidate(chord, measure)
+        ]
+        if not context_chords:
+            continue
+
+        best = max(context_chords, key=_chord_score)
+        components = best.get("components") or {}
+        root = str(components.get("root") or "")
+        if not root:
+            continue
+
+        accidental = components.get("accidental")
+        for chord in context_chords:
+            other = chord.get("components") or {}
+            if other.get("root") == root and other.get("accidental"):
+                accidental = other.get("accidental")
+                break
+
+        raw_texts = [str(token.text) for token in tokens]
+        minor_cue = any(_raw_has_minor_cue(text) for text in raw_texts) or any(
+            (chord.get("components") or {}).get("quality") == "minor"
+            for chord in context_chords
+        )
+        major_seventh_cue = any(_chord_has_major_seventh(chord) for chord in context_chords)
+        sixth_cue = any(_chord_has_extension(chord, "6") for chord in context_chords) or any(
+            _raw_is_standalone_extension(text, "6") for text in raw_texts
+        )
+        seventh_cue = (
+            major_seventh_cue
+            or any(_chord_has_extension(chord, "7") for chord in context_chords)
+            or any(_raw_has_seventh_cue(text) for text in raw_texts)
+        )
+
+        quality = components.get("quality")
+        if quality in {"diminished", "half_diminished"}:
+            continue
+
+        if major_seventh_cue:
+            body = "mMaj7" if minor_cue else "maj7"
+        elif minor_cue:
+            if seventh_cue:
+                body = "m7"
+            elif sixth_cue:
+                body = "m6"
+            else:
+                body = "m"
+        elif sixth_cue:
+            body = "6"
+        elif seventh_cue:
+            body = "7"
+        else:
+            continue
+
+        _rewrite_chord(best, root=root, accidental=accidental, body=body)
+
+
+def _infer_repeated_rootless_minor_chords(
+    measure: MeasureCell,
+    *,
+    beats_per_bar: int,
+) -> None:
+    if not measure.chords:
+        return
+
+    width = measure.bbox[2] - measure.bbox[0]
+    group_threshold = max(40.0, width * 0.16)
+    repeat_threshold = max(80.0, width * 0.55)
+    source_chords = list(measure.chords)
+
+    for token in measure.ocr_tokens:
+        if not _raw_is_rootless_minor_fragment(token.text):
+            continue
+        token_center = token.cx
+        if any(
+            abs(token_center - _bbox_center_x(chord.get("bbox"))) <= group_threshold
+            for chord in source_chords
+            if not _is_lower_bass_chord_candidate(chord, measure)
+        ):
+            continue
+
+        candidates = []
+        for chord in measure.chords:
+            if _is_lower_bass_chord_candidate(chord, measure):
+                continue
+            chord_center = _bbox_center_x(chord.get("bbox"))
+            distance = token_center - chord_center
+            if 0 < distance <= repeat_threshold:
+                candidates.append((distance, chord))
+        if not candidates:
+            continue
+
+        _distance, template = min(candidates, key=lambda item: item[0])
+        components = template.get("components") or {}
+        root = components.get("root")
+        if not root:
+            continue
+
+        template_body = _body_from_chord(template)
+        body = template_body if template_body and template_body.startswith("m") else "m7"
+        if "7" not in token.text and template_body is None:
+            body = "m"
+
+        parsed = parse_chord_symbol(
+            f"{root}{components.get('accidental') or ''}{body}"
+        )
+        if parsed is None:
+            continue
+
+        measure.chords.append(
+            _chord_payload(
+                parsed,
+                bbox=token.bbox,
+                confidence=token.confidence,
+                measure=measure,
+                beats_per_bar=beats_per_bar,
+            )
+        )
+
+
+def _chord_groups(measure: MeasureCell) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+    threshold = max(40.0, (measure.bbox[2] - measure.bbox[0]) * 0.16)
+
+    for chord in sorted(measure.chords, key=lambda item: _bbox_center_x(item.get("bbox"))):
+        center = _bbox_center_x(chord.get("bbox"))
+        matched: dict[str, Any] | None = None
+        for group in groups:
+            if abs(center - group["center"]) <= threshold:
+                matched = group
+                break
+        if matched is None:
+            groups.append({"center": center, "chords": [chord], "tokens": []})
+        else:
+            matched["chords"].append(chord)
+            matched["center"] = float(
+                np.mean([_bbox_center_x(item.get("bbox")) for item in matched["chords"]])
+            )
+
+    for token in measure.ocr_tokens:
+        center = token.cx
+        matched = None
+        for group in groups:
+            if abs(center - group["center"]) <= threshold:
+                matched = group
+                break
+        if matched is not None:
+            matched["tokens"].append(token)
+
+    return groups
+
+
+def _deduplicate_measure_chords(measure: MeasureCell) -> None:
+    if len(measure.chords) < 2:
+        return
+
+    groups = _chord_groups(measure)
+    kept: list[dict[str, Any]] = []
+    for group in groups:
+        chords = group["chords"]
+        if not chords:
+            continue
+        kept.append(max(chords, key=_chord_score))
+
+    kept.sort(key=lambda chord: _bbox_center_x(chord.get("bbox")))
+    measure.chords = kept
+
+
+def _propagate_same_root_extensions(measure: MeasureCell) -> None:
+    if len(measure.chords) < 2:
+        return
+
+    templates: dict[tuple[object, object, object], dict[str, Any]] = {}
+    for chord in measure.chords:
+        components = chord.get("components") or {}
+        if not components.get("extensions"):
+            continue
+        key = (
+            components.get("root"),
+            components.get("accidental"),
+            components.get("quality"),
+        )
+        current = templates.get(key)
+        if current is None or _chord_score(chord) > _chord_score(current):
+            templates[key] = chord
+
+    for chord in measure.chords:
+        components = chord.get("components") or {}
+        if components.get("extensions") or components.get("alterations"):
+            continue
+        key = (
+            components.get("root"),
+            components.get("accidental"),
+            components.get("quality"),
+        )
+        template = templates.get(key)
+        if template is None:
+            continue
+        body = _body_from_chord(template)
+        if body:
+            _rewrite_chord(
+                chord,
+                root=str(components.get("root") or ""),
+                accidental=components.get("accidental"),
+                body=body,
+            )
+
+
+def _rewrite_chord(
+    chord: dict[str, Any],
+    *,
+    root: str,
+    accidental: object,
+    body: str,
+) -> None:
+    accidental_text = str(accidental or "")
+    text_norm = f"{root}{accidental_text}{body}"
+    bass = (chord.get("components") or {}).get("bass")
+    if bass:
+        text_norm = f"{text_norm}/{bass}"
+
+    chord["text_norm"] = text_norm
+    chord["components"] = {
+        "root": root,
+        "accidental": accidental_text or None,
+        "quality": _quality_from_body(body),
+        "extensions": _extensions_from_body(body),
+        "alterations": _alterations_from_body(body),
+        "bass": bass,
+    }
+
+
+def _chord_score(chord: dict[str, Any]) -> float:
+    components = chord.get("components") or {}
+    score = float(chord.get("confidence") or 0.0)
+    score += len(str(chord.get("text_norm") or "")) * 0.25
+    if components.get("accidental"):
+        score += 1.5
+    if components.get("quality") not in {None, "major"}:
+        score += 1.0
+    if components.get("extensions"):
+        score += 1.0
+    if components.get("alterations"):
+        score += 1.0
+    if components.get("bass"):
+        score += 1.2
+    if "maj7" in str(chord.get("text_norm") or ""):
+        score += 1.2
+    return score
+
+
+def _bbox_center_x(bbox: object) -> float:
+    if not isinstance(bbox, list | tuple) or len(bbox) != 4:
+        return 0.0
+    return (float(bbox[0]) + float(bbox[2])) / 2.0
+
+
+def _raw_has_minor_cue(text: str) -> bool:
+    return (
+        "-" in text
+        or "\u2212" in text
+        or "\u2013" in text
+        or "\u2014" in text
+        or _raw_looks_like_minor_seventh_fragment(text)
+    )
+
+
+def _raw_has_seventh_cue(text: str) -> bool:
+    stripped = text.strip()
+    return (
+        "7" in stripped
+        or "z" in stripped.lower()
+        or stripped in {"N7", "A7"}
+        or _raw_looks_like_minor_seventh_fragment(text)
+    )
+
+
+def _raw_looks_like_minor_seventh_fragment(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text.strip()).upper()
+    return compact in {"U/", "V/", "K"}
+
+
+def _raw_is_rootless_minor_fragment(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text.strip()).upper()
+    return re.fullmatch(r"[0O][-_\u2212\u2013\u2014](?:7)?", compact) is not None
+
+
+def _raw_is_standalone_extension(text: str, extension: str) -> bool:
+    return text.strip() == extension
+
+
+def _chord_has_major_seventh(chord: dict[str, Any]) -> bool:
+    return "maj7" in str(chord.get("text_norm") or "")
+
+
+def _chord_has_extension(chord: dict[str, Any], extension: str) -> bool:
+    return extension in ((chord.get("components") or {}).get("extensions") or [])
+
+
+def _body_from_chord(chord: dict[str, Any]) -> str | None:
+    components = chord.get("components") or {}
+    root = components.get("root")
+    if not root:
+        return None
+    prefix = f"{root}{components.get('accidental') or ''}"
+    main = str(chord.get("text_norm") or "").split("/", 1)[0]
+    if not main.startswith(prefix):
+        return None
+    return main[len(prefix) :]
+
+
+def _quality_from_body(body: str) -> str:
+    if body.startswith("mMaj"):
+        return "minor_major"
+    if body.startswith("m7b5"):
+        return "half_diminished"
+    if body.startswith("maj"):
+        return "major"
+    if body.startswith("m"):
+        return "minor"
+    if body.startswith("dim"):
+        return "diminished"
+    if body.startswith("6") or body.startswith("7"):
+        return "dominant" if body.startswith("7") else "major"
+    return "major"
+
+
+def _extensions_from_body(body: str) -> list[str]:
+    return re.findall(r"(?<![#b])(?:6|7|9|11|13)", body)
+
+
+def _alterations_from_body(body: str) -> list[str]:
+    return re.findall(r"[#b](?:5|9|11|13)", body)
 
 
 def _resolve_previous_measure_repeats(measures: list[MeasureCell]) -> None:

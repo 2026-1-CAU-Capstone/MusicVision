@@ -128,13 +128,16 @@ def _repair_ocr_spellings(token: str) -> str:
     token = token.replace(";", "#")
     token = token.replace("v", "b").replace("V", "b")
     token = re.sub(r"^[0O](?=[Dd])", "", token)
-
+    if re.fullmatch(r"N[-\u2212\u2013\u2014mM]?[0-9#b()+-]*", token):
+        token = f"A{token[1:]}"
     special_repairs = {
         "0713": "D7b13",
         "0D7h3": "D7b13",
         "0D113": "D7b13",
         "D113": "D7b13",
         "6719": "G7b9",
+        "6z": "G7",
+        "9z": "G7",
     }
     if token in special_repairs:
         return special_repairs[token]
@@ -144,7 +147,7 @@ def _repair_ocr_spellings(token: str) -> str:
         "9": "G",
         "8": "B",
     }
-    if token and token[0] in root_repairs:
+    if len(token) > 1 and token[0] in root_repairs:
         token = f"{root_repairs[token[0]]}{token[1:]}"
 
     match = ROOT_RE.match(token)
@@ -157,7 +160,11 @@ def _repair_ocr_spellings(token: str) -> str:
     rest_lower = rest.lower()
     prefix = f"{root}{accidental}"
 
-    if rest_lower in {"az", "a7", "lz", "l7"}:
+    if accidental and rest_lower in {"z", "az", "a7", "lz", "l7"}:
+        return f"{prefix}maj7"
+    if not accidental and root == "B" and rest_lower in {"zz", "4z"}:
+        return "Bbmaj7"
+    if not accidental and rest_lower in {"az", "a7", "lz", "l7"}:
         return f"{prefix if accidental else root + 'b'}maj7"
     if root == "A" and not accidental and rest_lower in {"zz", "oz"}:
         return "Am7b5"
@@ -165,7 +172,11 @@ def _repair_ocr_spellings(token: str) -> str:
         return "Edim7"
     if root == "B" and not accidental and rest_lower == "s":
         return "Bb6"
-    if not accidental and rest_lower.startswith(("h", "q", "n")):
+    if not accidental and rest_lower in {"hz", "qz", "nz", "pz"}:
+        return f"{root}bmaj7"
+    if not accidental and rest_lower in {"h", "q", "n", "p"}:
+        return f"{root}b"
+    if not accidental and rest_lower.startswith(("h", "q", "n", "p")):
         repaired_tail = rest[1:].replace("z", "7").replace("Z", "7")
         return f"{root}b{repaired_tail}"
     if root in {"A", "B"} and not accidental and rest_lower == "z":

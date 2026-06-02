@@ -31,6 +31,7 @@ from app.core.config import (
     OMR_CALLBACK_URL,
 )
 from app.schemas.omr import (
+    ChordChartProcessResponse,
     JobStatusResponse,
     OMRProcessQueuedResponse,
     OMRProcessSyncResponse,
@@ -45,10 +46,15 @@ from app.services.job_service import (
     validate_job_id,
     write_job_status,
 )
-from app.services.omr_service import run_omr_pipeline, run_sheet_music_chord_pipeline
+from app.services.omr_service import (
+    run_chord_chart_pipeline,
+    run_omr_pipeline,
+    run_sheet_music_chord_pipeline,
+)
 
 
 CHORD_ASSIGNMENTS_FILENAME = "chord_assignments.json"
+CHORD_CHART_FILENAME = "chord_chart.json"
 OMR_API_KEY_HEADER = "X-OMR-API-Key"
 OMR_CALLBACK_API_KEY_HEADER = "X-OMR-Callback-API-Key"
 logger = logging.getLogger("musicvision.omr")
@@ -270,6 +276,120 @@ def process_sheet_music_chords(
 
 
 @router.post(
+    "/chords/chart/process",
+    response_model=ChordChartProcessResponse,
+    response_model_exclude_none=True,
+    dependencies=[Depends(log_process_request)],
+)
+def process_chord_chart(
+    file: UploadFile = File(...),
+    job_id: str | None = Form(default=None),
+) -> ChordChartProcessResponse:
+    safe_job_id, input_file_path, job_paths = _save_omr_upload(
+        file=file,
+        job_id=job_id,
+        callback_url=None,
+    )
+    write_job_status(
+        safe_job_id,
+        status="processing",
+        message="Chord chart processing in progress",
+    )
+
+    try:
+        pipeline_result = run_chord_chart_pipeline(
+            job_id=safe_job_id,
+            input_file_path=input_file_path,
+            intermediate_dir=job_paths.intermediate_dir,
+            output_dir=job_paths.output_dir,
+            logs_dir=job_paths.logs_dir,
+        )
+    except Exception as exc:
+        logger.exception("Chord chart processing failed: job_id=%s", safe_job_id)
+        error_message = str(exc) or exc.__class__.__name__
+        write_job_status(
+            safe_job_id,
+            status="failed",
+            message="Chord chart processing failed",
+            error=error_message,
+        )
+        raise
+
+    chord_chart_path = _relative_path(pipeline_result.chord_chart_path)
+    chord_chart = _read_json_object(
+        pipeline_result.chord_chart_path,
+        error_message="Chord chart payload must be a JSON object.",
+    )
+    write_job_status(
+        safe_job_id,
+        status="completed",
+        message="Chord chart processing completed",
+        chord_chart_path=chord_chart_path,
+    )
+
+    return ChordChartProcessResponse(
+        job_id=safe_job_id,
+        status="completed",
+        source_type="chord_chart",
+        chord_chart_path=chord_chart_path,
+        chord_chart=chord_chart,
+        message="Chord chart processing completed",
+    )
+
+
+@router.post(
+    "/chords/chart/dev/process",
+    response_model=OMRProcessQueuedResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[
+        Depends(log_process_request),
+        Depends(require_configured_omr_api_key),
+    ],
+)
+def process_chord_chart_dev(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    job_id: str | None = Form(default=None),
+    callback_url: str | None = Form(default=None),
+) -> OMRProcessQueuedResponse:
+    safe_callback_url = _validate_callback_url(
+        callback_url,
+        error_detail="callback_url must be an absolute http(s) URL.",
+    )
+    return _queue_chord_chart_job(
+        background_tasks=background_tasks,
+        file=file,
+        job_id=job_id,
+        callback_url=safe_callback_url,
+    )
+
+
+@router.post(
+    "/chords/chart/prod/process",
+    response_model=OMRProcessQueuedResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[
+        Depends(log_process_request),
+        Depends(require_configured_omr_api_key),
+    ],
+)
+def process_chord_chart_prod(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    job_id: str | None = Form(default=None),
+    callback_url: str | None = Form(default=None),
+) -> OMRProcessQueuedResponse:
+    return _queue_chord_chart_job(
+        background_tasks=background_tasks,
+        file=file,
+        job_id=job_id,
+        callback_url=_resolve_prod_callback_url(callback_url),
+    )
+
+
+@router.post(
     "/omr/prod/process",
     response_model=OMRProcessQueuedResponse,
     response_model_exclude_none=True,
@@ -329,6 +449,42 @@ def _queue_omr_job(
     )
 
 
+def _queue_chord_chart_job(
+    *,
+    background_tasks: BackgroundTasks,
+    file: UploadFile,
+    job_id: str | None,
+    callback_url: str | None,
+) -> OMRProcessQueuedResponse:
+    safe_job_id, input_file_path, job_paths = _save_omr_upload(
+        file=file,
+        job_id=job_id,
+        callback_url=callback_url,
+    )
+
+    write_job_status(
+        safe_job_id,
+        status="queued",
+        message="Chord chart processing queued",
+        callback_url=callback_url,
+    )
+    background_tasks.add_task(
+        _run_chord_chart_job,
+        job_id=safe_job_id,
+        input_file_path=input_file_path,
+        intermediate_dir=job_paths.intermediate_dir,
+        output_dir=job_paths.output_dir,
+        logs_dir=job_paths.logs_dir,
+        callback_url=callback_url,
+    )
+
+    return OMRProcessQueuedResponse(
+        job_id=safe_job_id,
+        status="queued",
+        message="Chord chart processing queued",
+    )
+
+
 def _save_omr_upload(
     *,
     file: UploadFile,
@@ -337,6 +493,14 @@ def _save_omr_upload(
 ) -> tuple[str, Path, JobPaths]:
     requested_job_id = job_id or str(uuid4())
     safe_job_id = validate_job_id(requested_job_id)
+    if (JOBS_DIR / safe_job_id).exists():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "job_id already exists. Use a new job_id to preserve existing "
+                "job artifacts."
+            ),
+        )
 
     original_filename = file.filename or ""
     logger.info(
@@ -381,6 +545,7 @@ def get_job_status(job_id: str) -> JobStatusResponse:
 
     job_dir = JOBS_DIR / safe_job_id
     chord_assignments_path = _find_chord_assignments_path(job_dir)
+    chord_chart_path = _find_chord_chart_path(job_dir)
 
     if chord_assignments_path is not None:
         musicxml_path = job_dir / "output" / "score.musicxml"
@@ -392,6 +557,14 @@ def get_job_status(job_id: str) -> JobStatusResponse:
                 _relative_path(musicxml_path) if musicxml_path.exists() else None
             ),
             chord_assignments_path=_relative_path(chord_assignments_path),
+        )
+
+    if chord_chart_path is not None:
+        return JobStatusResponse(
+            job_id=safe_job_id,
+            status="completed",
+            message="Chord chart processing completed",
+            chord_chart_path=_relative_path(chord_chart_path),
         )
 
     if job_dir.exists():
@@ -446,6 +619,24 @@ def get_job_chord_assignments(job_id: str) -> FileResponse:
     )
 
 
+@router.get("/omr/jobs/{job_id}/chord-chart", response_class=FileResponse)
+def get_job_chord_chart(job_id: str) -> FileResponse:
+    safe_job_id = validate_job_id(job_id)
+    chord_chart_path = _find_chord_chart_path(JOBS_DIR / safe_job_id)
+
+    if chord_chart_path is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Chord chart not found",
+        )
+
+    return FileResponse(
+        path=chord_chart_path,
+        media_type="application/json",
+        filename=CHORD_CHART_FILENAME,
+    )
+
+
 def _find_chord_assignments_path(job_dir: Path) -> Path | None:
     canonical_path = job_dir / "output" / CHORD_ASSIGNMENTS_FILENAME
     if canonical_path.exists():
@@ -454,10 +645,25 @@ def _find_chord_assignments_path(job_dir: Path) -> Path | None:
     return None
 
 
+def _find_chord_chart_path(job_dir: Path) -> Path | None:
+    canonical_path = job_dir / "output" / CHORD_CHART_FILENAME
+    if canonical_path.exists():
+        return canonical_path
+
+    return None
+
+
 def _read_chord_assignments_json(chord_assignments_path: Path) -> dict[str, object]:
-    payload = json.loads(chord_assignments_path.read_text(encoding="utf-8"))
+    return _read_json_object(
+        chord_assignments_path,
+        error_message="Chord assignments payload must be a JSON object.",
+    )
+
+
+def _read_json_object(path: Path, *, error_message: str) -> dict[str, object]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
-        raise ValueError("Chord assignments payload must be a JSON object.")
+        raise ValueError(error_message)
 
     return payload
 
@@ -505,6 +711,53 @@ def _run_omr_job(
         message="OMR processing completed",
         musicxml_path=_relative_path(pipeline_result.musicxml_path),
         chord_assignments_path=_relative_path(pipeline_result.chord_assignments_path),
+        callback_url=callback_url,
+    )
+    _send_job_callback(job_id, callback_url, payload)
+
+
+def _run_chord_chart_job(
+    *,
+    job_id: str,
+    input_file_path: Path,
+    intermediate_dir: Path,
+    output_dir: Path,
+    logs_dir: Path,
+    callback_url: str | None,
+) -> None:
+    write_job_status(
+        job_id,
+        status="processing",
+        message="Chord chart processing in progress",
+        callback_url=callback_url,
+    )
+
+    try:
+        pipeline_result = run_chord_chart_pipeline(
+            job_id=job_id,
+            input_file_path=input_file_path,
+            intermediate_dir=intermediate_dir,
+            output_dir=output_dir,
+            logs_dir=logs_dir,
+        )
+    except Exception as exc:
+        logger.exception("Chord chart processing failed: job_id=%s", job_id)
+        error_message = str(exc) or exc.__class__.__name__
+        payload = write_job_status(
+            job_id,
+            status="failed",
+            message="Chord chart processing failed",
+            callback_url=callback_url,
+            error=error_message,
+        )
+        _send_job_callback(job_id, callback_url, payload)
+        return
+
+    payload = write_job_status(
+        job_id,
+        status="completed",
+        message="Chord chart processing completed",
+        chord_chart_path=_relative_path(pipeline_result.chord_chart_path),
         callback_url=callback_url,
     )
     _send_job_callback(job_id, callback_url, payload)
@@ -636,6 +889,7 @@ def _job_status_response_from_record(
         message=record.get("message"),
         musicxml_path=record.get("musicxml_path"),
         chord_assignments_path=record.get("chord_assignments_path"),
+        chord_chart_path=record.get("chord_chart_path"),
         error=record.get("error"),
         callback_error=record.get("callback_error"),
     )

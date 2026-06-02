@@ -5,12 +5,14 @@ MusicVision service.
 
 ## 1. Choose the upload workflow
 
-MusicVision exposes two async upload endpoints for Spring Boot integration:
+MusicVision exposes async upload endpoints for Spring Boot integration:
 
 | Endpoint | Intended use | Callback behavior |
 | --- | --- | --- |
 | `POST /omr/dev/process` | local/dev integration and callback testing | accepts optional request `callback_url` |
 | `POST /omr/prod/process` | deployed backend integration | requires request `callback_url`; host must match configured `OMR_CALLBACK_URL` |
+| `POST /chords/chart/dev/process` | local/dev chord-chart integration and callback testing | accepts optional request `callback_url`; requires `X-OMR-API-Key` |
+| `POST /chords/chart/prod/process` | deployed chord-chart integration | requires request `callback_url`; host must match configured `OMR_CALLBACK_URL`; requires `X-OMR-API-Key` |
 
 Both endpoints store the upload, queue the OMR job, and return
 `202 Accepted`. Both also support polling with `GET /omr/jobs/{job_id}`.
@@ -56,9 +58,11 @@ Success response:
 }
 ```
 
-When `OMR_API_KEY` is configured, the development endpoint requires
-`X-OMR-API-Key`. In local development, leaving `OMR_API_KEY` empty keeps this
-endpoint open for convenience.
+When `OMR_API_KEY` is configured, the OMR development endpoint requires
+`X-OMR-API-Key`. In local development, leaving `OMR_API_KEY` empty keeps the OMR
+development endpoint open for convenience. The chord-chart development endpoint
+always requires `OMR_API_KEY` to be configured and supplied through
+`X-OMR-API-Key`.
 
 ### Production async endpoint
 
@@ -114,12 +118,27 @@ payloads are **MusicVision-local artifact paths**, not frontend URLs.
 The backend should retrieve the files through the API endpoints below rather than
 depending on MusicVision's filesystem layout.
 
+Chord-chart processing can be synchronous or async:
+
+```text
+POST /chords/chart/process
+POST /chords/chart/dev/process
+POST /chords/chart/prod/process
+Content-Type: multipart/form-data
+X-OMR-API-Key: <omr-api-key>
+```
+
+The synchronous endpoint returns `chord_chart.json` inline and also stores it for
+retrieval through `GET /omr/jobs/{job_id}/chord-chart`. The dev/prod chart
+endpoints queue the same chart pipeline and use the callback rules above.
+
 ### Callback payload
 
 When a callback URL is present, MusicVision posts a JSON payload after the job
-reaches a terminal state. For `/omr/dev/process`, that URL comes from the
-request `callback_url`; for `/omr/prod/process`, it also comes from the request
-`callback_url` after host validation against `OMR_CALLBACK_URL`.
+reaches a terminal state. For `/omr/dev/process` and
+`/chords/chart/dev/process`, that URL comes from the request `callback_url`; for
+`/omr/prod/process` and `/chords/chart/prod/process`, it also comes from the
+request `callback_url` after host validation against `OMR_CALLBACK_URL`.
 
 When `OMR_CALLBACK_API_KEY` is configured, MusicVision also sends:
 
@@ -225,6 +244,71 @@ Representative payload:
                   "beat": 1
                 }
               ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Chord chart
+
+```text
+GET /omr/jobs/{job_id}/chord-chart
+X-OMR-API-Key: <omr-api-key>
+```
+
+Response:
+
+```text
+Content-Type: application/json
+```
+
+Representative payload:
+
+```json
+{
+  "job_id": "demo-chart",
+  "source_type": "chord_chart",
+  "time_signature": {
+    "text_raw": "4/4",
+    "numerator": 4,
+    "denominator": 4
+  },
+  "flow": {
+    "repeat_groups": [],
+    "endings": [],
+    "navigation": [
+      {
+        "type": "dc_al_ending",
+        "text_raw": "D.C. al 2nd ending",
+        "target_ending": 2
+      }
+    ]
+  },
+  "pages": [
+    {
+      "page": 1,
+      "assignment_source": "chart_grid_detection",
+      "systems": [
+        {
+          "index": 1,
+          "section": "A",
+          "measures": [
+            {
+              "index": 1,
+              "left_boundary": { "kind": "start_repeat" },
+              "right_boundary": { "kind": "single" },
+              "chords": [
+                {
+                  "text_raw": "Ab-7b5",
+                  "text_norm": "Abm7b5",
+                  "beat": 1
+                }
+              ],
+              "symbols": []
             }
           ]
         }

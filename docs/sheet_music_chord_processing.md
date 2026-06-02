@@ -1,6 +1,6 @@
-# Printed Chord OCR Architecture
+# Sheet Music Chord Processing Architecture
 
-This branch adds printed chord-symbol OCR to the existing MusicVision OMR flow.
+This branch adds printed chord-symbol processing to the existing MusicVision OMR flow.
 It does **not** infer chords from HOMR-recognized notes. Instead, it reads chord
 symbols that are printed on the sheet image, such as `Dm7`, `G7`, and `Cmaj7`,
 and assigns them to visual measures.
@@ -29,7 +29,7 @@ artifacts afterward.
 For the internal HOMR boundary between pre-TrOMR visual geometry and post-TrOMR
 MusicXML generation, see [`homr_tromr_pipeline.md`](homr_tromr_pipeline.md).
 For runtime baselines and EasyOCR optimization notes, see
-[`chord_ocr_performance.md`](chord_ocr_performance.md).
+[`sheet_music_chord_processing_performance.md`](sheet_music_chord_processing_performance.md).
 
 ## Why `homr_processed.png` matters
 
@@ -487,7 +487,7 @@ Intentionally deferred:
   trailing `7`
 
 For a chronological record of the implementation changes and verification
-results, see `docs/chord_ocr_changelog.md`.
+results, see `docs/sheet_music_chord_processing_changelog.md`.
 
 For a metrics-focused before/after summary of the Airegin reference run, see
-`docs/chord_ocr_progress_metrics.md`.
+`docs/sheet_music_chord_processing_progress_metrics.md`.

@@ -29,11 +29,21 @@ class SheetMusicChordProcessResponse(BaseModel):
     message: str
 
 
+class ChordChartProcessResponse(BaseModel):
+    job_id: str
+    status: Literal["completed"]
+    source_type: Literal["chord_chart"]
+    chord_chart_path: str
+    chord_chart: dict[str, Any]
+    message: str
+
+
 class JobStatusResponse(BaseModel):
     job_id: str
     status: JobStatus
     message: str | None = None
     musicxml_path: str | None = None
     chord_assignments_path: str | None = None
+    chord_chart_path: str | None = None
     error: str | None = None
     callback_error: str | None = None

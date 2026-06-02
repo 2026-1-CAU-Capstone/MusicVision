@@ -1,12 +1,18 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from pipeline.chord_charts.ocr_backend import (
+    extract_chart_cell_ocr_tokens,
+    extract_chart_ocr_tokens,
+)
+from pipeline.chord_charts.overlay import write_chord_chart_overlay
+from pipeline.chord_charts.parser import detect_chart_grid, parse_chord_chart_image
 from pipeline.chords.easyocr_backend import extract_chord_tokens_ocr
 from pipeline.chords.measure_assignment import assign_chords_to_measures
 from pipeline.chords.ocr_common import load_rgb_image
 from pipeline.chords.overlay import write_chord_assignment_overlay
 from pipeline.chords.token_filters import filter_probable_non_chords, serialize_token
-from pipeline.export import export_chord_assignments_json
+from pipeline.export import export_chord_assignments_json, export_chord_chart_json
 from pipeline.homr_artifacts import load_geometry_json
 from pipeline.musicxml_alignment import (
     annotate_measure_alignment,
@@ -26,6 +32,11 @@ class PipelineResult:
 @dataclass(frozen=True)
 class SheetMusicChordPipelineResult:
     chord_assignments_path: Path
+
+
+@dataclass(frozen=True)
+class ChordChartPipelineResult:
+    chord_chart_path: Path
 
 
 def run_omr_pipeline(
@@ -157,6 +168,42 @@ def run_sheet_music_chord_pipeline(
     )
 
     return SheetMusicChordPipelineResult(chord_assignments_path=chord_assignments_path)
+
+
+def run_chord_chart_pipeline(
+    *,
+    job_id: str,
+    input_file_path: Path,
+    intermediate_dir: Path,
+    output_dir: Path,
+    logs_dir: Path,
+) -> ChordChartPipelineResult:
+    del intermediate_dir, logs_dir
+
+    image = load_rgb_image(input_file_path)
+    rows = detect_chart_grid(image)
+    page_tokens, page_rejects = extract_chart_ocr_tokens(image)
+    cell_tokens, cell_rejects = extract_chart_cell_ocr_tokens(image, rows)
+    result_payload = parse_chord_chart_image(
+        image=image,
+        tokens=[*page_tokens, *cell_tokens],
+        ocr_rejects=[*page_rejects, *cell_rejects],
+        job_id=job_id,
+        source_file=input_file_path.name,
+        rows=rows,
+    )
+    overlay_path = write_chord_chart_overlay(
+        image=image,
+        pages=result_payload["pages"],
+        output_dir=output_dir,
+    )
+    result_payload["overlay_file"] = overlay_path.name
+    chord_chart_path = export_chord_chart_json(
+        result_payload=result_payload,
+        output_dir=output_dir,
+    )
+
+    return ChordChartPipelineResult(chord_chart_path=chord_chart_path)
 
 
 def _postprocess_sheet_music_chord_output(

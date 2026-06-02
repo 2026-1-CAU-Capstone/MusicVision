@@ -114,6 +114,17 @@ payloads are **MusicVision-local artifact paths**, not frontend URLs.
 The backend should retrieve the files through the API endpoints below rather than
 depending on MusicVision's filesystem layout.
 
+Chord-chart processing is synchronous and separate from the async OMR workflow:
+
+```text
+POST /chords/chart/process
+Content-Type: multipart/form-data
+X-OMR-API-Key: <omr-api-key>
+```
+
+It returns `chord_chart.json` inline and also stores it for retrieval through
+`GET /omr/jobs/{job_id}/chord-chart`.
+
 ### Callback payload
 
 When a callback URL is present, MusicVision posts a JSON payload after the job
@@ -225,6 +236,71 @@ Representative payload:
                   "beat": 1
                 }
               ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Chord chart
+
+```text
+GET /omr/jobs/{job_id}/chord-chart
+X-OMR-API-Key: <omr-api-key>
+```
+
+Response:
+
+```text
+Content-Type: application/json
+```
+
+Representative payload:
+
+```json
+{
+  "job_id": "demo-chart",
+  "source_type": "chord_chart",
+  "time_signature": {
+    "text_raw": "4/4",
+    "numerator": 4,
+    "denominator": 4
+  },
+  "flow": {
+    "repeat_groups": [],
+    "endings": [],
+    "navigation": [
+      {
+        "type": "dc_al_ending",
+        "text_raw": "D.C. al 2nd ending",
+        "target_ending": 2
+      }
+    ]
+  },
+  "pages": [
+    {
+      "page": 1,
+      "assignment_source": "chart_grid_detection",
+      "systems": [
+        {
+          "index": 1,
+          "section": "A",
+          "measures": [
+            {
+              "index": 1,
+              "left_boundary": { "kind": "start_repeat" },
+              "right_boundary": { "kind": "single" },
+              "chords": [
+                {
+                  "text_raw": "Ab-7b5",
+                  "text_norm": "Abm7b5",
+                  "beat": 1
+                }
+              ],
+              "symbols": []
             }
           ]
         }

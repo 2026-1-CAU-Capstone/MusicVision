@@ -18,15 +18,19 @@ Configure the expected value with:
 OMR_API_KEY=<secret>
 ```
 
-When `OMR_API_KEY` is set, every `/omr/*` endpoint requires the header:
+When `OMR_API_KEY` is set, every protected processing/retrieval endpoint requires
+the header:
 
 ```text
 POST /omr/process
 POST /omr/dev/process
 POST /omr/prod/process
+POST /chords/sheet-music/process
+POST /chords/chart/process
 GET  /omr/jobs/{job_id}
 GET  /omr/jobs/{job_id}/musicxml
 GET  /omr/jobs/{job_id}/chord-assignments
+GET  /omr/jobs/{job_id}/chord-chart
 ```
 
 `/health` remains unauthenticated so deployments can still perform simple health

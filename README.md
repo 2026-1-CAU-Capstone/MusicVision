@@ -31,6 +31,18 @@ geometry detection for staff systems and barlines, then skips TrOMR/MusicXML
 generation. Because no MusicXML is produced, its measure alignment status is
 `visual_only`.
 
+For Real Book-style chord charts that use chart grids, section markers, repeat
+symbols, endings, navigation text, and slash chords, use:
+
+```text
+POST /chords/chart/process
+```
+
+This returns and stores `chord_chart.json`. The chart payload is separate from
+`chord_assignments.json` because it contains chart-flow symbols such as `%`,
+repeat boundaries, first/second endings, `Fine`, and `D.C. al ...` navigation in
+addition to normalized chord symbols.
+
 Each completed job also writes `chord_assignment_overlay.png`, a diagnostic image
 showing measure assignment and OCR decisions in the HOMR processed-image coordinate
 space.
@@ -55,6 +67,12 @@ Retrieve the structured chord-assignment JSON with:
 GET /omr/jobs/{job_id}/chord-assignments
 ```
 
+Retrieve the structured chord-chart JSON with:
+
+```text
+GET /omr/jobs/{job_id}/chord-chart
+```
+
 The printed chord-symbol OCR architecture, artifact contract, and coordinate-space
 rules are documented in:
 
@@ -67,6 +85,12 @@ in:
 
 ```text
 docs/api/
+```
+
+The chord-chart parser contract is documented in:
+
+```text
+docs/chord_charts.md
 ```
 
 The OMR endpoints can be protected with `X-OMR-API-Key`, and the production

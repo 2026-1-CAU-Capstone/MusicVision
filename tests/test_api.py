@@ -292,6 +292,112 @@ def test_process_sheet_music_chords_rejects_unsupported_extensions(
     }
 
 
+def test_process_chord_chart_returns_chart(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run_chord_chart_pipeline(
+        *,
+        job_id: str,
+        input_file_path: Path,
+        intermediate_dir: Path,
+        output_dir: Path,
+        logs_dir: Path,
+    ) -> omr_service.ChordChartPipelineResult:
+        chord_chart = {
+            "job_id": job_id,
+            "source_file": input_file_path.name,
+            "source_type": "chord_chart",
+            "pipeline": "chart_grid_ocr",
+            "time_signature": {
+                "text_raw": "4/4",
+                "numerator": 4,
+                "denominator": 4,
+            },
+            "pages": [
+                {
+                    "page": 1,
+                    "assignment_source": "chart_grid_detection",
+                    "systems": [
+                        {
+                            "index": 1,
+                            "section": "A",
+                            "measures": [
+                                {
+                                    "index": 1,
+                                    "chords": [
+                                        {
+                                            "text_raw": "Ab-7b5",
+                                            "text_norm": "Abm7b5",
+                                            "beat": 1,
+                                        }
+                                    ],
+                                    "symbols": [],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "flow": {
+                "repeat_groups": [],
+                "endings": [],
+                "navigation": [],
+            },
+            "chart_ocr": {
+                "backend": "easyocr",
+                "accepted_tokens": [],
+                "rejected_hits": [],
+                "unassigned_tokens": [],
+                "detected_symbols": [],
+            },
+            "warnings": [],
+        }
+        chord_chart_path = output_dir / "chord_chart.json"
+        chord_chart_path.write_text(json.dumps(chord_chart), encoding="utf-8")
+        return omr_service.ChordChartPipelineResult(chord_chart_path=chord_chart_path)
+
+    monkeypatch.setattr(
+        omr_endpoint,
+        "run_chord_chart_pipeline",
+        fake_run_chord_chart_pipeline,
+    )
+
+    response = client.post(
+        "/chords/chart/process",
+        data={"job_id": "chart-job"},
+        files={"file": ("chart.png", BytesIO(b"fake-image"), "image/png")},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job_id"] == "chart-job"
+    assert payload["status"] == "completed"
+    assert payload["source_type"] == "chord_chart"
+    assert payload["chord_chart_path"] == "jobs/chart-job/output/chord_chart.json"
+    assert payload["chord_chart"]["source_type"] == "chord_chart"
+    assert (
+        payload["chord_chart"]["pages"][0]["systems"][0]["measures"][0]["chords"][0][
+            "text_norm"
+        ]
+        == "Abm7b5"
+    )
+
+    completed = client.get("/omr/jobs/chart-job")
+    assert completed.status_code == 200
+    assert completed.json() == {
+        "job_id": "chart-job",
+        "status": "completed",
+        "message": "Chord chart processing completed",
+        "chord_chart_path": "jobs/chart-job/output/chord_chart.json",
+    }
+
+    chart_file = client.get("/omr/jobs/chart-job/chord-chart")
+    assert chart_file.status_code == 200
+    assert chart_file.json()["source_type"] == "chord_chart"
+    assert chart_file.headers["content-type"] == "application/json"
+
+
 def test_process_omr_rejects_unsupported_extensions(client: TestClient) -> None:
     response = client.post(
         "/omr/process",
@@ -620,3 +726,10 @@ def test_get_job_chord_assignments_returns_404_when_missing(client: TestClient) 
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Chord assignments not found"}
+
+
+def test_get_job_chord_chart_returns_404_when_missing(client: TestClient) -> None:
+    response = client.get("/omr/jobs/missing-job/chord-chart")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Chord chart not found"}

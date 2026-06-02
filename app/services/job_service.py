@@ -71,6 +71,7 @@ def write_job_status(
     message: str,
     musicxml_path: str | None = None,
     chord_assignments_path: str | None = None,
+    chord_chart_path: str | None = None,
     callback_url: str | None = None,
     error: str | None = None,
     callback_error: str | None = None,
@@ -83,6 +84,7 @@ def write_job_status(
     optional_fields = {
         "musicxml_path": musicxml_path,
         "chord_assignments_path": chord_assignments_path,
+        "chord_chart_path": chord_chart_path,
         "callback_url": callback_url,
         "error": error,
         "callback_error": callback_error,
@@ -115,6 +117,7 @@ def update_job_status(job_id: str, **updates: Any) -> dict[str, Any]:
         message=current_status["message"],
         musicxml_path=current_status.get("musicxml_path"),
         chord_assignments_path=current_status.get("chord_assignments_path"),
+        chord_chart_path=current_status.get("chord_chart_path"),
         callback_url=current_status.get("callback_url"),
         error=current_status.get("error"),
         callback_error=current_status.get("callback_error"),

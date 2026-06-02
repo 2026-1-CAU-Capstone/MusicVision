@@ -1,0 +1,1146 @@
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from typing import Any
+
+import cv2
+import numpy as np
+
+from pipeline.chord_charts.chord_symbol import ParsedChord, parse_chord_symbol
+from pipeline.chord_charts.ocr_backend import OCRToken
+from pipeline.chords.models import quantize_beat
+
+
+@dataclass
+class Boundary:
+    x: float
+    y_top: float
+    y_bottom: float
+    component_count: int
+    kind: str = "single"
+
+
+@dataclass
+class ChartRow:
+    index: int
+    y_top: float
+    y_bottom: float
+    boundaries: list[Boundary]
+    section: str | None = None
+    ending_number: int | None = None
+
+
+@dataclass
+class MeasureCell:
+    index: int
+    row_index: int
+    col_index: int
+    section: str | None
+    bbox: tuple[float, float, float, float]
+    left_boundary: Boundary
+    right_boundary: Boundary
+    ending_number: int | None = None
+    chords: list[dict[str, Any]] = field(default_factory=list)
+    symbols: list[dict[str, Any]] = field(default_factory=list)
+    navigation: list[dict[str, Any]] = field(default_factory=list)
+
+
+def parse_chord_chart_image(
+    *,
+    image: np.ndarray,
+    tokens: list[OCRToken],
+    ocr_rejects: list[dict[str, Any]],
+    job_id: str,
+    source_file: str,
+    overlay_file: str | None = None,
+    rows: list[ChartRow] | None = None,
+) -> dict[str, Any]:
+    rows = rows if rows is not None else detect_chart_grid(image)
+    if not rows:
+        raise ValueError("Could not detect chord-chart measure grid.")
+
+    warnings: list[str] = []
+    has_cell_tokens = any(token.source == "cell_ocr" for token in tokens)
+    time_signature = _extract_time_signature(tokens, rows)
+    if time_signature is None:
+        if _has_visible_time_signature_region(image, rows):
+            time_signature = {
+                "text_raw": "4/4",
+                "numerator": 4,
+                "denominator": 4,
+                "source": "visual_region_assumption",
+                "confidence": None,
+            }
+        else:
+            time_signature = {
+                "text_raw": None,
+                "numerator": 4,
+                "denominator": 4,
+                "source": "default_assumption",
+                "confidence": None,
+            }
+            warnings.append("No time signature was detected; defaulted to 4/4.")
+
+    beats_per_bar = int(time_signature.get("numerator") or 4)
+    metadata = _extract_metadata(tokens, rows, image_width=float(image.shape[1]))
+    section_markers = _find_section_markers(tokens, rows)
+    _apply_sections(rows, section_markers)
+    _apply_visual_endings(image, rows)
+
+    measures = _build_measure_cells(rows)
+    accepted_tokens: list[dict[str, Any]] = []
+    detected_symbols: list[dict[str, Any]] = []
+    unassigned_tokens: list[dict[str, Any]] = []
+
+    for token in _expand_chart_tokens(tokens):
+        if _is_time_signature_token(token, rows):
+            accepted_tokens.append({**token.to_dict(), "kind": "time_signature"})
+            continue
+        if _is_section_marker_token(token, rows):
+            accepted_tokens.append({**token.to_dict(), "kind": "section_marker"})
+            continue
+        if _is_header_token(token, rows):
+            continue
+
+        row = _nearest_row(token, rows)
+        if row is None:
+            navigation = _parse_navigation(token)
+            if navigation is not None:
+                detected_symbols.append(navigation)
+                accepted_tokens.append({**token.to_dict(), "kind": "navigation"})
+                continue
+
+            unassigned_tokens.append(
+                {**token.to_dict(), "reason": "outside detected chart grid"}
+            )
+            continue
+
+        ending_number = _parse_ending_number(token.text)
+        if ending_number is not None:
+            row.ending_number = ending_number
+            accepted_tokens.append({**token.to_dict(), "kind": "ending"})
+            detected_symbols.append(
+                {
+                    "type": "ending_marker",
+                    "number": ending_number,
+                    "row_index": row.index,
+                    "text_raw": token.text,
+                    "bbox": list(token.bbox),
+                }
+            )
+            continue
+
+        measure = _measure_for_token(token, measures)
+        if measure is None:
+            unassigned_tokens.append(
+                {**token.to_dict(), "reason": "outside detected measure cells"}
+            )
+            continue
+
+        navigation = _parse_navigation(token)
+        if navigation is not None:
+            navigation.update(
+                {
+                    "measure_index": measure.index,
+                    "section": measure.section,
+                    "bbox": list(token.bbox),
+                }
+            )
+            measure.navigation.append(navigation)
+            accepted_tokens.append({**token.to_dict(), "kind": "navigation"})
+            detected_symbols.append(navigation)
+            continue
+
+        if has_cell_tokens and token.source != "cell_ocr":
+            continue
+
+        repeat_symbol = _parse_repeat_symbol(token)
+        if repeat_symbol is not None:
+            repeat_symbol.update(
+                {
+                    "measure_index": measure.index,
+                    "section": measure.section,
+                    "bbox": list(token.bbox),
+                }
+            )
+            measure.symbols.append(repeat_symbol)
+            accepted_tokens.append({**token.to_dict(), "kind": "repeat_symbol"})
+            detected_symbols.append(repeat_symbol)
+            continue
+
+        slash_bass = _parse_slash_bass_token(token.text)
+        if slash_bass is not None:
+            measure.symbols.append(
+                {
+                    "type": "slash_bass",
+                    "bass": slash_bass,
+                    "text_raw": token.text,
+                    "bbox": list(token.bbox),
+                }
+            )
+            accepted_tokens.append({**token.to_dict(), "kind": "slash_bass"})
+            continue
+
+        parsed_chord = parse_chord_symbol(token.text)
+        if parsed_chord is not None:
+            measure.chords.append(
+                _chord_payload(
+                    parsed_chord,
+                    bbox=token.bbox,
+                    confidence=token.confidence,
+                    measure=measure,
+                    beats_per_bar=beats_per_bar,
+                )
+            )
+            accepted_tokens.append(
+                {
+                    **token.to_dict(),
+                    "kind": "chord",
+                    "text_norm": parsed_chord.text_norm,
+                }
+            )
+            continue
+
+        unassigned_tokens.append({**token.to_dict(), "reason": "unclassified"})
+
+    for measure in measures:
+        row = rows[measure.row_index - 1]
+        if row.ending_number is not None:
+            measure.ending_number = row.ending_number
+        _merge_slash_bass_symbols(measure)
+        _merge_vertical_bass_chords(measure)
+        visual_repeat = _detect_visual_percent_repeat(image, measure)
+        if visual_repeat is not None and not any(
+            symbol.get("type") == "repeat_previous_measure"
+            for symbol in measure.symbols
+        ):
+            measure.symbols.append(visual_repeat)
+            detected_symbols.append(visual_repeat)
+
+    _resolve_previous_measure_repeats(measures)
+    page_payload = _page_payload(
+        image=image,
+        rows=rows,
+        measures=measures,
+    )
+
+    result: dict[str, Any] = {
+        "job_id": job_id,
+        "source_file": source_file,
+        "source_type": "chord_chart",
+        "pipeline": "chart_grid_ocr",
+        "title": metadata.get("title"),
+        "composer": metadata.get("composer"),
+        "style": metadata.get("style"),
+        "time_signature": time_signature,
+        "beats_per_bar": beats_per_bar,
+        "flow": _flow_payload(measures),
+        "chart_ocr": {
+            "backend": "easyocr",
+            "accepted_tokens": accepted_tokens,
+            "rejected_hits": ocr_rejects,
+            "unassigned_tokens": unassigned_tokens,
+            "detected_symbols": detected_symbols,
+        },
+        "pages": [page_payload],
+        "warnings": warnings,
+    }
+    if overlay_file is not None:
+        result["overlay_file"] = overlay_file
+
+    return result
+
+
+def detect_chart_grid(image: np.ndarray) -> list[ChartRow]:
+    height, width = image.shape[:2]
+    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    kernel_height = max(45, int(height * 0.025))
+    vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, kernel_height))
+    vertical_mask = cv2.morphologyEx(binary, cv2.MORPH_OPEN, vertical_kernel)
+
+    components = _vertical_components(vertical_mask, image_width=width, image_height=height)
+    if not components:
+        return []
+
+    row_groups = _cluster_components_by_y(components, image_height=height)
+    rows: list[ChartRow] = []
+    row_index = 1
+    for group in row_groups:
+        group = _full_height_row_components(group)
+        boundaries = _boundaries_from_components(
+            group,
+            binary=binary,
+            image_width=width,
+        )
+        if len(boundaries) < 2:
+            continue
+
+        valid_boundaries = _remove_tiny_leading_intervals(
+            boundaries,
+            min_gap=max(80.0, width * 0.06),
+        )
+        if len(valid_boundaries) < 2:
+            continue
+
+        y_top = min(boundary.y_top for boundary in valid_boundaries)
+        y_bottom = max(boundary.y_bottom for boundary in valid_boundaries)
+        rows.append(
+            ChartRow(
+                index=row_index,
+                y_top=float(y_top),
+                y_bottom=float(y_bottom),
+                boundaries=valid_boundaries,
+            )
+        )
+        row_index += 1
+
+    return rows
+
+
+def _full_height_row_components(
+    components: list[dict[str, float]],
+) -> list[dict[str, float]]:
+    if not components:
+        return []
+
+    max_height = max(component["h"] for component in components)
+    min_height = max(55.0, max_height * 0.72)
+    return [component for component in components if component["h"] >= min_height]
+
+
+def _vertical_components(
+    vertical_mask: np.ndarray,
+    *,
+    image_width: int,
+    image_height: int,
+) -> list[dict[str, float]]:
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        vertical_mask,
+        connectivity=8,
+    )
+    components: list[dict[str, float]] = []
+    min_height = max(55, int(image_height * 0.025))
+    max_width = max(32, int(image_width * 0.025))
+
+    for index in range(1, count):
+        x, y, w, h, area = stats[index]
+        if h < min_height or w > max_width:
+            continue
+        if h / max(float(w), 1.0) < 3.0:
+            continue
+        components.append(
+            {
+                "x": float(x),
+                "y": float(y),
+                "w": float(w),
+                "h": float(h),
+                "area": float(area),
+                "cx": float(x + (w - 1) / 2.0),
+                "cy": float(y + (h - 1) / 2.0),
+                "x1": float(x + w),
+                "y1": float(y + h),
+            }
+        )
+
+    return components
+
+
+def _cluster_components_by_y(
+    components: list[dict[str, float]],
+    *,
+    image_height: int,
+) -> list[list[dict[str, float]]]:
+    tolerance = max(70.0, image_height * 0.035)
+    groups: list[list[dict[str, float]]] = []
+
+    for component in sorted(components, key=lambda item: item["cy"]):
+        matched_group: list[dict[str, float]] | None = None
+        for group in groups:
+            group_center = float(np.median([item["cy"] for item in group]))
+            if abs(component["cy"] - group_center) <= tolerance:
+                matched_group = group
+                break
+
+        if matched_group is None:
+            groups.append([component])
+        else:
+            matched_group.append(component)
+
+    return groups
+
+
+def _boundaries_from_components(
+    components: list[dict[str, float]],
+    *,
+    binary: np.ndarray,
+    image_width: int,
+) -> list[Boundary]:
+    x_tolerance = max(12.0, image_width * 0.008)
+    sorted_components = sorted(components, key=lambda item: item["cx"])
+    groups: list[list[dict[str, float]]] = []
+
+    for component in sorted_components:
+        if groups and abs(component["cx"] - np.median([item["cx"] for item in groups[-1]])) <= x_tolerance:
+            groups[-1].append(component)
+        else:
+            groups.append([component])
+
+    boundaries: list[Boundary] = []
+    for group in groups:
+        x = float(np.median([item["cx"] for item in group]))
+        y_top = min(item["y"] for item in group)
+        y_bottom = max(item["y1"] for item in group)
+        boundary = Boundary(
+            x=x,
+            y_top=float(y_top),
+            y_bottom=float(y_bottom),
+            component_count=len(group),
+        )
+        boundary.kind = _boundary_kind(boundary, group=group, binary=binary)
+        boundaries.append(boundary)
+
+    return boundaries
+
+
+def _boundary_kind(
+    boundary: Boundary,
+    *,
+    group: list[dict[str, float]],
+    binary: np.ndarray,
+) -> str:
+    left_dots = _count_repeat_dots(binary, boundary, side="left")
+    right_dots = _count_repeat_dots(binary, boundary, side="right")
+    if left_dots >= 2 and right_dots >= 2:
+        return "repeat_both"
+    if left_dots >= 2:
+        return "end_repeat"
+    if right_dots >= 2:
+        return "start_repeat"
+    if len(group) >= 2:
+        return "double"
+    return "single"
+
+
+def _count_repeat_dots(binary: np.ndarray, boundary: Boundary, *, side: str) -> int:
+    height, width = binary.shape[:2]
+    x0 = int(max(0, boundary.x - 55 if side == "left" else boundary.x + 6))
+    x1 = int(min(width, boundary.x - 6 if side == "left" else boundary.x + 55))
+    y0 = int(max(0, boundary.y_top))
+    y1 = int(min(height, boundary.y_bottom))
+    if x1 <= x0 or y1 <= y0:
+        return 0
+
+    roi = binary[y0:y1, x0:x1]
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        roi,
+        connectivity=8,
+    )
+    dots = 0
+    for index in range(1, count):
+        _x, _y, w, h, area = stats[index]
+        if not (5 <= w <= 40 and 5 <= h <= 40):
+            continue
+        aspect = w / max(float(h), 1.0)
+        fill = area / max(float(w * h), 1.0)
+        if 0.55 <= aspect <= 1.45 and fill >= 0.45:
+            dots += 1
+
+    return dots
+
+
+def _remove_tiny_leading_intervals(
+    boundaries: list[Boundary],
+    *,
+    min_gap: float,
+) -> list[Boundary]:
+    result = list(boundaries)
+    while len(result) >= 2 and result[1].x - result[0].x < min_gap:
+        result.pop(0)
+    return result
+
+
+def _build_measure_cells(rows: list[ChartRow]) -> list[MeasureCell]:
+    measures: list[MeasureCell] = []
+    measure_index = 1
+    for row in rows:
+        for col_index, (left, right) in enumerate(
+            zip(row.boundaries, row.boundaries[1:]),
+            start=1,
+        ):
+            if right.x <= left.x:
+                continue
+            measures.append(
+                MeasureCell(
+                    index=measure_index,
+                    row_index=row.index,
+                    col_index=col_index,
+                    section=row.section,
+                    bbox=(left.x, row.y_top, right.x, row.y_bottom),
+                    left_boundary=left,
+                    right_boundary=right,
+                    ending_number=row.ending_number,
+                )
+            )
+            measure_index += 1
+
+    return measures
+
+
+def _extract_metadata(
+    tokens: list[OCRToken],
+    rows: list[ChartRow],
+    *,
+    image_width: float,
+) -> dict[str, str | None]:
+    first_y = rows[0].y_top
+    header_tokens = [
+        token for token in tokens if token.bbox[3] < first_y - 8 and len(token.text.strip()) > 1
+    ]
+    title_tokens = [
+        token
+        for token in header_tokens
+        if image_width * 0.25 <= token.cx <= image_width * 0.75
+        and not token.text.strip().startswith("(")
+    ]
+    composer_tokens = [
+        token for token in header_tokens if token.cx > image_width * 0.58
+    ]
+    style_tokens = [
+        token
+        for token in header_tokens
+        if token.cx < image_width * 0.35 or token.text.strip().startswith("(")
+    ]
+
+    return {
+        "title": _join_tokens_same_line(title_tokens),
+        "composer": _join_tokens_same_line(composer_tokens),
+        "style": _clean_wrapped_text(_join_tokens_same_line(style_tokens)),
+    }
+
+
+def _extract_time_signature(
+    tokens: list[OCRToken],
+    rows: list[ChartRow],
+) -> dict[str, Any] | None:
+    first_row = rows[0]
+    left_x = first_row.boundaries[0].x
+    candidates = [
+        token
+        for token in tokens
+        if token.cx < left_x + 55
+        and first_row.y_top - 40 <= token.cy <= first_row.y_bottom + 20
+        and bool(re.fullmatch(r"[0-9/:\s]+", token.text.strip()))
+    ]
+    raw_text = " ".join(token.text for token in sorted(candidates, key=lambda item: item.cy))
+    compact = re.sub(r"\s+", "", raw_text)
+    match = re.search(r"(?P<num>\d+)[/:]?(?P<den>\d+)", compact)
+    if match is None:
+        return None
+
+    try:
+        numerator = int(match.group("num")[0])
+        denominator = int(match.group("den")[-1])
+    except ValueError:
+        return None
+
+    return {
+        "text_raw": raw_text or compact,
+        "numerator": numerator,
+        "denominator": denominator,
+        "source": "ocr",
+        "confidence": _average_confidence(candidates),
+    }
+
+
+def _has_visible_time_signature_region(image: np.ndarray, rows: list[ChartRow]) -> bool:
+    first_row = rows[0]
+    x0 = 0
+    x1 = int(max(0, first_row.boundaries[0].x - 8))
+    y0 = int(max(0, first_row.y_top - 8))
+    y1 = int(min(image.shape[0], first_row.y_bottom + 8))
+    if x1 <= x0 or y1 <= y0:
+        return False
+
+    crop = image[y0:y1, x0:x1]
+    gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    return int(np.count_nonzero(binary)) >= max(200, int(binary.size * 0.08))
+
+
+def _find_section_markers(
+    tokens: list[OCRToken],
+    rows: list[ChartRow],
+) -> list[dict[str, Any]]:
+    markers: list[dict[str, Any]] = []
+    for row in rows:
+        left_x = row.boundaries[0].x
+        for token in tokens:
+            text = token.text.strip().upper()
+            if not re.fullmatch(r"[A-Z]", text):
+                continue
+            if token.cx > left_x + 12:
+                continue
+            if row.y_top - 95 <= token.cy <= row.y_top + 35:
+                markers.append(
+                    {
+                        "section": text,
+                        "row_index": row.index,
+                        "bbox": list(token.bbox),
+                        "confidence": token.confidence,
+                    }
+                )
+                break
+
+    return markers
+
+
+def _apply_sections(rows: list[ChartRow], markers: list[dict[str, Any]]) -> None:
+    marker_by_row = {marker["row_index"]: marker["section"] for marker in markers}
+    current_section: str | None = None
+    for row in rows:
+        if row.index in marker_by_row:
+            current_section = str(marker_by_row[row.index])
+        row.section = current_section
+
+
+def _apply_visual_endings(image: np.ndarray, rows: list[ChartRow]) -> None:
+    ending_rows = [row for row in rows if _has_ending_bracket_above_row(image, row)]
+    for number, row in enumerate(ending_rows, start=1):
+        if row.ending_number is None:
+            row.ending_number = number
+
+
+def _has_ending_bracket_above_row(image: np.ndarray, row: ChartRow) -> bool:
+    x0 = int(max(0, row.boundaries[0].x - 5))
+    x1 = int(min(image.shape[1], row.boundaries[1].x + 15))
+    y0 = int(max(0, row.y_top - 95))
+    y1 = int(max(0, row.y_top - 4))
+    if x1 <= x0 or y1 <= y0:
+        return False
+
+    crop = image[y0:y1, x0:x1]
+    gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (55, 3))
+    horizontal = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        horizontal,
+        connectivity=8,
+    )
+
+    for index in range(1, count):
+        _x, _y, width, height, area = stats[index]
+        if width >= 80 and height <= 12 and area >= 120:
+            return True
+
+    return False
+
+
+def _expand_chart_tokens(tokens: list[OCRToken]) -> list[OCRToken]:
+    expanded: list[OCRToken] = []
+    for token in tokens:
+        if _parse_navigation(token) is not None:
+            expanded.append(token)
+            continue
+
+        parts = token.text.split()
+        if len(parts) <= 1:
+            expanded.append(token)
+            continue
+
+        x0, y0, x1, y1 = token.bbox
+        total_chars = sum(len(part) for part in parts)
+        if total_chars == 0:
+            expanded.append(token)
+            continue
+
+        cursor = x0
+        width = x1 - x0
+        for part in parts:
+            part_width = width * (len(part) / total_chars)
+            expanded.append(
+                OCRToken(
+                    text=part,
+                    bbox=(cursor, y0, cursor + part_width, y1),
+                    confidence=token.confidence,
+                )
+            )
+            cursor += part_width
+
+    return expanded
+
+
+def _is_header_token(token: OCRToken, rows: list[ChartRow]) -> bool:
+    return token.bbox[3] < rows[0].y_top - 8
+
+
+def _is_time_signature_token(token: OCRToken, rows: list[ChartRow]) -> bool:
+    first_row = rows[0]
+    return (
+        token.cx < first_row.boundaries[0].x + 55
+        and first_row.y_top - 40 <= token.cy <= first_row.y_bottom + 20
+        and bool(re.fullmatch(r"[0-9/:\s]+", token.text.strip()))
+    )
+
+
+def _is_section_marker_token(token: OCRToken, rows: list[ChartRow]) -> bool:
+    text = token.text.strip().upper()
+    if not re.fullmatch(r"[A-Z]", text):
+        return False
+
+    for row in rows:
+        if token.cx <= row.boundaries[0].x + 12 and row.y_top - 95 <= token.cy <= row.y_top + 35:
+            return True
+
+    return False
+
+
+def _nearest_row(token: OCRToken, rows: list[ChartRow]) -> ChartRow | None:
+    candidates = [
+        row
+        for row in rows
+        if row.y_top - 55 <= token.cy <= row.y_bottom + 55
+    ]
+    if not candidates:
+        return None
+
+    return min(
+        candidates,
+        key=lambda row: abs(token.cy - ((row.y_top + row.y_bottom) / 2.0)),
+    )
+
+
+def _measure_for_token(
+    token: OCRToken,
+    measures: list[MeasureCell],
+) -> MeasureCell | None:
+    candidates = [
+        measure
+        for measure in measures
+        if measure.bbox[0] - 8 <= token.cx <= measure.bbox[2] + 8
+        and measure.bbox[1] - 60 <= token.cy <= measure.bbox[3] + 60
+    ]
+    if not candidates:
+        return None
+
+    return min(
+        candidates,
+        key=lambda measure: (
+            abs(token.cy - ((measure.bbox[1] + measure.bbox[3]) / 2.0)),
+            abs(token.cx - ((measure.bbox[0] + measure.bbox[2]) / 2.0)),
+        ),
+    )
+
+
+def _parse_ending_number(text: str) -> int | None:
+    match = re.fullmatch(r"\[?\s*([12])\.?", text.strip())
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _parse_repeat_symbol(token: OCRToken) -> dict[str, Any] | None:
+    if "%" not in token.text:
+        return None
+
+    return {
+        "type": "repeat_previous_measure",
+        "text_raw": token.text,
+    }
+
+
+def _parse_navigation(token: OCRToken) -> dict[str, Any] | None:
+    text = token.text.strip()
+    lower = text.lower().replace(" ", "")
+    if lower == "fine":
+        return {
+            "type": "fine",
+            "text_raw": text,
+        }
+    if lower.startswith(("d.c.", "dc")):
+        payload: dict[str, Any] = {
+            "type": "dc",
+            "text_raw": text,
+        }
+        ending_match = re.search(r"(\d+)(?:st|nd|rd|th)?ending", lower)
+        if ending_match:
+            payload["type"] = "dc_al_ending"
+            payload["target_ending"] = int(ending_match.group(1))
+        return payload
+
+    return None
+
+
+def _parse_slash_bass_token(text: str) -> str | None:
+    stripped = text.strip()
+    match = re.fullmatch(r"/\s*([A-Ga-g])([#b]?)", stripped)
+    if match is None:
+        return None
+
+    return f"{match.group(1).upper()}{match.group(2)}"
+
+
+def _chord_payload(
+    parsed_chord: ParsedChord,
+    *,
+    bbox: tuple[float, float, float, float],
+    confidence: float | None,
+    measure: MeasureCell,
+    beats_per_bar: int,
+) -> dict[str, Any]:
+    payload = parsed_chord.to_dict()
+    payload.update(
+        {
+            "bbox": [float(value) for value in bbox],
+            "confidence": confidence,
+            "beat": quantize_beat(
+                (bbox[0] + bbox[2]) / 2.0,
+                measure.bbox[0],
+                measure.bbox[2],
+                beats_per_bar,
+            ),
+        }
+    )
+    return payload
+
+
+def _merge_slash_bass_symbols(measure: MeasureCell) -> None:
+    slash_symbols = [
+        symbol for symbol in measure.symbols if symbol.get("type") == "slash_bass"
+    ]
+    if not slash_symbols or not measure.chords:
+        return
+
+    for symbol in slash_symbols:
+        bbox = symbol.get("bbox") or [0, 0, 0, 0]
+        cx = (float(bbox[0]) + float(bbox[2])) / 2.0
+        target = min(
+            measure.chords,
+            key=lambda chord: abs(
+                cx
+                - (
+                    float(chord["bbox"][0])
+                    + float(chord["bbox"][2])
+                )
+                / 2.0
+            ),
+        )
+        if target["components"].get("bass") is None:
+            _attach_bass_to_chord(target, str(symbol["bass"]), str(symbol["text_raw"]))
+
+
+def _merge_vertical_bass_chords(measure: MeasureCell) -> None:
+    if len(measure.chords) < 2:
+        return
+
+    row_y0, row_y1 = measure.bbox[1], measure.bbox[3]
+    lower_threshold = row_y0 + (row_y1 - row_y0) * 0.62
+    to_remove: set[int] = set()
+
+    for index, chord in enumerate(measure.chords):
+        components = chord.get("components") or {}
+        if components.get("quality") != "major":
+            continue
+        if components.get("extensions") or components.get("alterations") or components.get("bass"):
+            continue
+
+        chord_bbox = chord.get("bbox") or [0, 0, 0, 0]
+        chord_cx = (float(chord_bbox[0]) + float(chord_bbox[2])) / 2.0
+        chord_cy = (float(chord_bbox[1]) + float(chord_bbox[3])) / 2.0
+        if chord_cy < lower_threshold:
+            continue
+
+        candidates: list[tuple[float, int, dict[str, Any]]] = []
+        for target_index, target in enumerate(measure.chords):
+            if target_index == index or target_index in to_remove:
+                continue
+            target_bbox = target.get("bbox") or [0, 0, 0, 0]
+            target_cx = (float(target_bbox[0]) + float(target_bbox[2])) / 2.0
+            target_cy = (float(target_bbox[1]) + float(target_bbox[3])) / 2.0
+            if target_cy >= chord_cy or target["components"].get("bass") is not None:
+                continue
+            candidates.append((abs(chord_cx - target_cx), target_index, target))
+
+        if not candidates:
+            continue
+
+        distance, _target_index, target = min(candidates, key=lambda item: item[0])
+        if distance <= max(45.0, (measure.bbox[2] - measure.bbox[0]) * 0.22):
+            bass = f"{components['root']}{components.get('accidental') or ''}"
+            _attach_bass_to_chord(target, bass, str(chord["text_raw"]))
+            to_remove.add(index)
+
+    if to_remove:
+        measure.chords = [
+            chord for index, chord in enumerate(measure.chords) if index not in to_remove
+        ]
+
+
+def _attach_bass_to_chord(
+    chord: dict[str, Any],
+    bass: str,
+    raw_bass_text: str,
+) -> None:
+    chord["components"]["bass"] = bass
+    chord["text_raw"] = f"{chord['text_raw']}/{raw_bass_text.lstrip('/')}"
+    chord["text_norm"] = f"{chord['text_norm'].split('/')[0]}/{bass}"
+    chord["text_display"] = chord["text_raw"]
+
+
+def _resolve_previous_measure_repeats(measures: list[MeasureCell]) -> None:
+    previous_resolved: list[dict[str, Any]] = []
+    previous_index: int | None = None
+    for measure in measures:
+        repeat_symbols = [
+            symbol for symbol in measure.symbols if symbol.get("type") == "repeat_previous_measure"
+        ]
+        if repeat_symbols and previous_resolved:
+            resolved = []
+            for chord in previous_resolved:
+                copied = {
+                    key: value
+                    for key, value in chord.items()
+                    if key not in {"bbox", "confidence"}
+                }
+                copied["derived_from_measure_index"] = previous_index
+                resolved.append(copied)
+            for symbol in repeat_symbols:
+                symbol["resolved_from_measure_index"] = previous_index
+            measure.symbols.extend([])
+            setattr(measure, "resolved_chords", resolved)
+
+        if measure.chords:
+            previous_resolved = measure.chords
+            previous_index = measure.index
+        elif hasattr(measure, "resolved_chords"):
+            previous_resolved = getattr(measure, "resolved_chords")
+            previous_index = measure.index
+
+
+def _detect_visual_percent_repeat(
+    image: np.ndarray,
+    measure: MeasureCell,
+) -> dict[str, Any] | None:
+    if measure.chords:
+        return None
+
+    x0, y0, x1, y1 = [int(round(value)) for value in measure.bbox]
+    pad_x = max(8, int((x1 - x0) * 0.04))
+    pad_y = max(8, int((y1 - y0) * 0.08))
+    x0 = max(0, x0 + pad_x)
+    x1 = min(image.shape[1], x1 - pad_x)
+    y0 = max(0, y0 + pad_y)
+    y1 = min(image.shape[0], y1 - pad_y)
+    if x1 <= x0 or y1 <= y0:
+        return None
+
+    crop = image[y0:y1, x0:x1]
+    gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        binary,
+        connectivity=8,
+    )
+
+    dot_centers: list[tuple[float, float]] = []
+    for index in range(1, count):
+        x, y, width, height, area = stats[index]
+        if area < 25:
+            continue
+        aspect = width / max(float(height), 1.0)
+        fill = area / max(float(width * height), 1.0)
+        if (
+            8 <= width <= 80
+            and 8 <= height <= 80
+            and 0.55 <= aspect <= 1.45
+            and fill >= 0.35
+        ):
+            dot_centers.append((float(x + width / 2.0), float(y + height / 2.0)))
+
+    if len(dot_centers) < 2 or not _has_percent_diagonal(binary):
+        return None
+
+    crop_width = float(binary.shape[1])
+    crop_height = float(binary.shape[0])
+    upper_left_dots = [
+        center for center in dot_centers if center[0] < crop_width * 0.58 and center[1] < crop_height * 0.58
+    ]
+    lower_right_dots = [
+        center for center in dot_centers if center[0] > crop_width * 0.42 and center[1] > crop_height * 0.42
+    ]
+    if not upper_left_dots or not lower_right_dots:
+        return None
+
+    separated = any(
+        lower[0] - upper[0] > crop_width * 0.10
+        and lower[1] - upper[1] > crop_height * 0.15
+        for upper in upper_left_dots
+        for lower in lower_right_dots
+    )
+    if not separated:
+        return None
+
+    return {
+        "type": "repeat_previous_measure",
+        "text_raw": "%",
+        "source": "visual_percent_detection",
+        "measure_index": measure.index,
+        "section": measure.section,
+        "bbox": [float(x0), float(y0), float(x1), float(y1)],
+    }
+
+
+def _has_percent_diagonal(binary: np.ndarray) -> bool:
+    lines = cv2.HoughLinesP(
+        binary,
+        rho=1,
+        theta=np.pi / 180.0,
+        threshold=28,
+        minLineLength=max(32, int(min(binary.shape[:2]) * 0.28)),
+        maxLineGap=14,
+    )
+    if lines is None:
+        return False
+
+    for line in lines[:, 0]:
+        x0, y0, x1, y1 = [float(value) for value in line]
+        dx = x1 - x0
+        dy = y1 - y0
+        if dx == 0:
+            continue
+        angle = np.degrees(np.arctan2(dy, dx))
+        if -70.0 <= angle <= -20.0 or 110.0 <= angle <= 160.0:
+            return True
+
+    return False
+
+
+def _page_payload(
+    *,
+    image: np.ndarray,
+    rows: list[ChartRow],
+    measures: list[MeasureCell],
+) -> dict[str, Any]:
+    measure_by_row: dict[int, list[MeasureCell]] = {}
+    for measure in measures:
+        measure_by_row.setdefault(measure.row_index, []).append(measure)
+
+    systems = []
+    for row in rows:
+        row_measures = []
+        for measure in measure_by_row.get(row.index, []):
+            payload: dict[str, Any] = {
+                "index": measure.index,
+                "row_measure_index": measure.col_index,
+                "section": measure.section,
+                "bbox": [float(value) for value in measure.bbox],
+                "left_boundary": {"kind": measure.left_boundary.kind},
+                "right_boundary": {"kind": measure.right_boundary.kind},
+                "chords": measure.chords,
+                "symbols": measure.symbols,
+                "navigation": measure.navigation,
+            }
+            if measure.ending_number is not None:
+                payload["ending"] = {"number": measure.ending_number}
+            if hasattr(measure, "resolved_chords"):
+                payload["resolved_chords"] = getattr(measure, "resolved_chords")
+            row_measures.append(payload)
+
+        systems.append(
+            {
+                "index": row.index,
+                "section": row.section,
+                "bbox": [
+                    float(row.boundaries[0].x),
+                    float(row.y_top),
+                    float(row.boundaries[-1].x),
+                    float(row.y_bottom),
+                ],
+                "measures": row_measures,
+            }
+        )
+
+    return {
+        "page": 1,
+        "width": float(image.shape[1]),
+        "height": float(image.shape[0]),
+        "assignment_source": "chart_grid_detection",
+        "systems": systems,
+    }
+
+
+def _flow_payload(measures: list[MeasureCell]) -> dict[str, Any]:
+    repeat_groups = []
+    navigation = []
+    endings_by_number: dict[int, list[MeasureCell]] = {}
+    section_start_by_name: dict[str, int] = {}
+    current_repeat_start: int | None = None
+
+    for measure in measures:
+        if measure.section is not None and measure.section not in section_start_by_name:
+            section_start_by_name[measure.section] = measure.index
+
+        if measure.left_boundary.kind in {"start_repeat", "repeat_both"}:
+            current_repeat_start = measure.index
+
+        if measure.ending_number is not None:
+            endings_by_number.setdefault(measure.ending_number, []).append(measure)
+
+        if measure.right_boundary.kind in {"end_repeat", "repeat_both"}:
+            repeat_groups.append(
+                {
+                    "start_measure_index": current_repeat_start
+                    or (
+                        section_start_by_name.get(measure.section)
+                        if measure.section is not None
+                        else 1
+                    ),
+                    "end_measure_index": measure.index,
+                    "section": measure.section,
+                }
+            )
+            current_repeat_start = None
+
+        navigation.extend(measure.navigation)
+
+    endings = []
+    for number, ending_measures in sorted(endings_by_number.items()):
+        endings.append(
+            {
+                "number": number,
+                "start_measure_index": ending_measures[0].index,
+                "end_measure_index": ending_measures[-1].index,
+                "section": ending_measures[0].section,
+            }
+        )
+
+    return {
+        "repeat_groups": repeat_groups,
+        "endings": endings,
+        "navigation": navigation,
+    }
+
+
+def _join_tokens_same_line(tokens: list[OCRToken]) -> str | None:
+    if not tokens:
+        return None
+    ordered = sorted(tokens, key=lambda item: item.cx)
+    return " ".join(token.text.strip() for token in ordered if token.text.strip()) or None
+
+
+def _clean_wrapped_text(text: str | None) -> str | None:
+    if text is None:
+        return None
+    cleaned = text.strip()
+    if cleaned.startswith("(") and cleaned.endswith(")"):
+        return cleaned[1:-1].strip()
+    return cleaned
+
+
+def _average_confidence(tokens: list[OCRToken]) -> float | None:
+    values = [token.confidence for token in tokens if token.confidence is not None]
+    if not values:
+        return None
+    return float(sum(values) / len(values))

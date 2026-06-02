@@ -28,6 +28,11 @@ stores `chord_assignments.json`. It runs HOMR visual geometry detection only and
 skips TrOMR/MusicXML generation, so its response does not include a MusicXML path
 and its alignment status is `visual_only`.
 
+`POST /chords/chart/process` is the synchronous chord-chart endpoint for clean
+grid charts. It accepts the same raster image uploads, skips HOMR, detects chart
+rows/measures from barlines, parses chord symbols plus chart-flow symbols, returns
+the structured chart inline, and stores `chord_chart.json`.
+
 Async processing is exposed through explicit dev/prod endpoints:
 
 ```text
@@ -50,6 +55,7 @@ The main outputs are:
 | --- | --- |
 | `score.musicxml` | HOMR note / notation result |
 | `chord_assignments.json` | Printed chord symbols assigned to visual measures |
+| `chord_chart.json` | Chord-chart grid, chords, repeats, endings, and navigation |
 
 The important integration guarantee is the measure-alignment block inside
 `chord_assignments.json`:
@@ -82,9 +88,11 @@ POST /omr/process              # legacy sync
 POST /omr/dev/process          # async, request callback allowed
 POST /omr/prod/process         # async, domain-validated callback required
 POST /chords/sheet-music/process
+POST /chords/chart/process
 GET  /omr/jobs/{job_id}
 GET  /omr/jobs/{job_id}/musicxml
 GET  /omr/jobs/{job_id}/chord-assignments
+GET  /omr/jobs/{job_id}/chord-chart
 ```
 
 Job statuses are:

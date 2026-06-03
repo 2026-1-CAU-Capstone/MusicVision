@@ -227,11 +227,13 @@ def _run_ocr_pass(
         xs = [offset_x + point[0] * inverse_scale for point in points]
         ys = [offset_y + point[1] * inverse_scale for point in points]
         bbox = (float(min(xs)), float(min(ys)), float(max(xs)), float(max(ys)))
+        resolution = resolve_chord_ocr_text(raw_text)
 
         if confidence_value < min_confidence:
             rejects.append(
                 {
                     "text": raw_text,
+                    "text_norm": resolution.text_norm,
                     "bbox": list(bbox),
                     "conf": confidence_value,
                     "source": source,
@@ -243,11 +245,11 @@ def _run_ocr_pass(
                     "reason": (
                         f"confidence {confidence_value:.2f} < threshold {min_confidence:.2f}"
                     ),
+                    **resolution.uncertain_context(),
                 }
             )
             continue
 
-        resolution = resolve_chord_ocr_text(raw_text)
         if resolution.accepted:
             tokens.append(
                 ChordToken(
@@ -255,6 +257,7 @@ def _run_ocr_pass(
                     text_norm=resolution.text_norm,
                     bbox=bbox,
                     confidence=confidence_value,
+                    system_index=system_index,
                 )
             )
             continue
@@ -263,6 +266,7 @@ def _run_ocr_pass(
             raw_text,
             bbox,
             confidence=confidence_value,
+            system_index=system_index,
         )
         if split_tokens:
             tokens.extend(split_tokens)
@@ -389,6 +393,12 @@ def _systems_with_tokens(
         return result
 
     for token in tokens:
+        if token.system_index is not None and any(
+            system_index == token.system_index for system_index, _bbox in systems
+        ):
+            result.add(token.system_index)
+            continue
+
         system_index, _bbox = min(
             systems,
             key=lambda item: abs(token.cy - item[1][1]),
@@ -464,6 +474,8 @@ def _merge_ocr_tokens(tokens: list[ChordToken]) -> list[ChordToken]:
 
         current = merged[duplicate_index]
         if (token.confidence or 0.0) > (current.confidence or 0.0):
+            if token.system_index is None:
+                token.system_index = current.system_index
             merged[duplicate_index] = token
 
     return merged

@@ -236,6 +236,51 @@ def test_measure_assignment_can_use_expected_system_count_to_inspect_suspicious_
     ]
 
 
+def test_measure_assignment_prefers_token_system_index_when_available() -> None:
+    geometry = {
+        "coordinate_space": "homr_processed_image",
+        "image": {"width": 500, "height": 360},
+        "systems": [
+            {
+                "index": 1,
+                "bbox": [20, 70, 480, 130],
+                "staffs": [{"index": 1, "bbox": [20, 70, 480, 130]}],
+            },
+            {
+                "index": 2,
+                "bbox": [20, 190, 480, 250],
+                "staffs": [{"index": 1, "bbox": [20, 190, 480, 250]}],
+            },
+        ],
+        "barlines": [
+            {"bbox": [30, 70, 34, 130], "center": [32, 100]},
+            {"bbox": [230, 70, 234, 130], "center": [232, 100]},
+            {"bbox": [430, 70, 434, 130], "center": [432, 100]},
+            {"bbox": [30, 190, 34, 250], "center": [32, 220]},
+            {"bbox": [230, 190, 234, 250], "center": [232, 220]},
+            {"bbox": [430, 190, 434, 250], "center": [432, 220]},
+        ],
+    }
+    token = ChordToken(
+        "Bb-7",
+        "Bb-7",
+        (70, 125, 120, 145),
+        confidence=0.7,
+        system_index=2,
+    )
+
+    result = assign_chords_to_measures(
+        tokens=[token],
+        geometry=geometry,
+        image=np.zeros((360, 500, 3), dtype=np.uint8),
+        source_path="homr_processed.png",
+    )
+
+    systems = result["pages"][0]["systems"]
+    assert systems[0]["measures"][0]["chords"] == []
+    assert systems[1]["measures"][0]["chords"][0]["text_norm"] == "Bb-7"
+
+
 @pytest.mark.parametrize(
     "geometry",
     [

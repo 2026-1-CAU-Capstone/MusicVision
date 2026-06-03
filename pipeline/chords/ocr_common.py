@@ -44,6 +44,7 @@ def try_split_merged_token(
     bbox: tuple[float, float, float, float],
     *,
     confidence: float | None = None,
+    system_index: int | None = None,
 ) -> list[ChordToken]:
     text = re.sub(r"\s+", "", raw_text)
     if len(text) < 4:
@@ -74,11 +75,13 @@ def try_split_merged_token(
             text_norm=normalize_text(left_corrected),
             bbox=(x0, y0, midpoint_x, y1),
             confidence=confidence,
+            system_index=system_index,
         ),
         ChordToken(
             text_raw=text[split_index:],
             text_norm=normalize_text(right_corrected),
             bbox=(midpoint_x, y0, x1, y1),
             confidence=confidence,
+            system_index=system_index,
         ),
     ]

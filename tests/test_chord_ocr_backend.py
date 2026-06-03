@@ -278,3 +278,59 @@ def test_rejected_near_chord_reports_uncertain_candidate_context(monkeypatch) ->
             ],
         }
     ]
+
+
+def test_low_confidence_chord_like_hit_reports_uncertain_context(monkeypatch) -> None:
+    monkeypatch.setattr(ocr_backend, "preprocess_for_ocr", lambda image, scale: image)
+    monkeypatch.setattr(ocr_backend, "_get_reader", lambda gpu=False: object())
+    monkeypatch.setattr(
+        ocr_backend,
+        "_readtext",
+        lambda _reader, _image: [
+            (
+                [(10.0, 10.0), (40.0, 10.0), (40.0, 25.0), (10.0, 25.0)],
+                "C-1",
+                0.04,
+            )
+        ],
+    )
+
+    result = ocr_backend._run_ocr_pass(
+        np.full((40, 60, 3), 255, dtype=np.uint8),
+        min_confidence=0.15,
+        gpu=False,
+        ocr_scale=1.0,
+        source="targeted_chord_band",
+        system_index=2,
+    )
+
+    assert result.tokens == []
+    assert result.rejects == [
+        {
+            "text": "C-1",
+            "text_norm": "C-7",
+            "bbox": [10.0, 10.0, 40.0, 25.0],
+            "conf": 0.04,
+            "source": "targeted_chord_band",
+            "system_index": 2,
+            "reason": "confidence 0.04 < threshold 0.15",
+            "candidate_kind": "uncertain_chord",
+            "suggestions": [
+                {
+                    "text_norm": "C-7",
+                    "score": 0.95,
+                    "reason": "suspicious_accepted_chord_repair",
+                },
+                {
+                    "text_norm": "C-11",
+                    "score": 0.8,
+                    "reason": "suspicious_accepted_chord_repair",
+                },
+                {
+                    "text_norm": "C-13",
+                    "score": 0.8,
+                    "reason": "suspicious_accepted_chord_repair",
+                },
+            ],
+        }
+    ]

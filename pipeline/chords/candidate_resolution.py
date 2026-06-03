@@ -7,9 +7,10 @@ from typing import Any
 from pipeline.chords.grammar import looks_like_chord, looks_like_chord_ocr, normalize_text
 
 
-AUTO_CORRECT_MIN_SCORE = 0.78
+AUTO_CORRECT_MIN_SCORE = 0.75
 AUTO_CORRECT_MIN_MARGIN = 0.05
 SUGGESTION_MIN_SCORE = 0.58
+SUSPICIOUS_REPAIR_MIN_SCORE = 0.86
 
 _ROOTS = tuple("ABCDEFG")
 _ACCIDENTALS = ("", "b", "#")
@@ -63,7 +64,7 @@ _COMMON_SUFFIXES = (
 
 _CONFUSION_GROUPS = (
     frozenset(("7", "t", "z", "?", '"', "'")),
-    frozenset(("a", "4")),
+    frozenset(("a", "4", "r")),
     frozenset(("i", "j", "1", "l")),
     frozenset(("g", "6", "9")),
     frozenset(("b", "8", "h", "q")),
@@ -90,13 +91,46 @@ class ChordOCRResolution:
             "suggestions": self.suggestions,
         }
 
+    def uncertain_context(self) -> dict[str, Any]:
+        if self.suggestions:
+            return self.reject_context()
+        if not self.accepted or not self.text_norm:
+            return {}
+        return {
+            "candidate_kind": "uncertain_chord",
+            "suggestions": [
+                {
+                    "text_norm": self.text_norm,
+                    "score": 1.0,
+                    "reason": "valid_chord_but_low_ocr_confidence",
+                }
+            ],
+        }
+
 
 def resolve_chord_ocr_text(text: str) -> ChordOCRResolution:
     passed, corrected = looks_like_chord_ocr(text)
     if passed:
+        text_norm = normalize_text(corrected)
+        if _is_suspicious_accepted_chord(text_norm):
+            suggestions = suggest_suspicious_accepted_chord_candidates(
+                raw_text=text,
+                accepted_text=text_norm,
+            )
+            if _has_clear_auto_correction(suggestions):
+                best = suggestions[0]
+                if str(best["text_norm"]) != text_norm:
+                    return ChordOCRResolution(
+                        accepted=True,
+                        text_norm=str(best["text_norm"]),
+                        corrected_text=str(best["text_norm"]),
+                        suggestions=suggestions,
+                        auto_corrected=True,
+                    )
+
         return ChordOCRResolution(
             accepted=True,
-            text_norm=normalize_text(corrected),
+            text_norm=text_norm,
             corrected_text=corrected,
             suggestions=[],
             auto_corrected=False,
@@ -120,6 +154,60 @@ def resolve_chord_ocr_text(text: str) -> ChordOCRResolution:
         suggestions=suggestions,
         auto_corrected=False,
     )
+
+
+def suggest_suspicious_accepted_chord_candidates(
+    *,
+    raw_text: str,
+    accepted_text: str,
+    max_suggestions: int = 3,
+) -> list[dict[str, Any]]:
+    variants = _repair_variant_texts(raw_text)
+    suggestions: list[tuple[float, str]] = []
+    seen = {accepted_text}
+
+    for variant, edit_count in variants:
+        if not looks_like_chord(variant):
+            continue
+        variant_norm = normalize_text(variant)
+        if variant_norm in seen:
+            continue
+        if not _is_common_chord_symbol(variant_norm):
+            continue
+        seen.add(variant_norm)
+        score = max(
+            SUSPICIOUS_REPAIR_MIN_SCORE,
+            round(1.0 - (0.05 * edit_count), 3),
+        )
+        suggestions.append((score, variant_norm))
+
+    suggestions.extend(
+        (
+            float(suggestion["score"]),
+            str(suggestion["text_norm"]),
+        )
+        for suggestion in suggest_chord_ocr_candidates(raw_text)
+        if str(suggestion["text_norm"]) not in seen
+    )
+    suggestions.sort(key=lambda item: (-item[0], len(item[1]), item[1]))
+
+    result = []
+    emitted = set()
+    for score, candidate in suggestions:
+        if candidate in emitted:
+            continue
+        emitted.add(candidate)
+        result.append(
+            {
+                "text_norm": candidate,
+                "score": round(score, 3),
+                "reason": "suspicious_accepted_chord_repair",
+            }
+        )
+        if len(result) >= max_suggestions:
+            break
+
+    return result
 
 
 def suggest_chord_ocr_candidates(
@@ -178,6 +266,25 @@ def _has_clear_auto_correction(suggestions: list[dict[str, Any]]) -> bool:
     return best_score - second_score >= AUTO_CORRECT_MIN_MARGIN
 
 
+def _is_suspicious_accepted_chord(text: str) -> bool:
+    token = normalize_text(text).strip()
+    if not token:
+        return False
+    if token.count("(") != token.count(")"):
+        return True
+    if _is_common_chord_symbol(token):
+        return False
+    return True
+
+
+def _is_common_chord_symbol(text: str) -> bool:
+    token = normalize_text(text).strip()
+    roots = _candidate_roots(token)
+    if not roots:
+        return False
+    return token in _candidate_symbols_for_roots(tuple(roots))
+
+
 def _candidate_roots(text: str) -> list[str]:
     token = normalize_text(text).strip()
     if not token:
@@ -194,6 +301,66 @@ def _candidate_roots(text: str) -> list[str]:
     return [f"{root}{accidental}"]
 
 
+def _repair_variant_texts(text: str) -> list[tuple[str, int]]:
+    _passed, corrected = looks_like_chord_ocr(text)
+    compact = _comparison_preserving_symbols(corrected)
+    if len(compact) < 2:
+        return []
+
+    option_sets: list[list[tuple[str, int]]] = []
+    for index, char in enumerate(compact):
+        options = [(char, 0)]
+        if index == 1 and char in {"5", "6"}:
+            options.append(("b", 1))
+        if index == 1 and char == "8":
+            options.append(("#", 1))
+        if char == "1" and _looks_like_terminal_seven(compact, index):
+            options.append(("7", 1))
+        if char == "2" and _looks_like_minor_dash(compact, index):
+            options.append(("-", 1))
+        if char == "9" and index + 1 < len(compact) and compact[index + 1] == ")":
+            options.append(("7", 1))
+        if char == ")" and "(" not in compact[: index + 1]:
+            options.append(("", 1))
+        option_sets.append(options)
+
+    variants: dict[str, int] = {}
+
+    def emit(index: int, chars: list[str], edits: int) -> None:
+        if len(variants) > 96:
+            return
+        if index == len(option_sets):
+            candidate = "".join(chars)
+            if candidate and candidate != compact:
+                variants[candidate] = min(edits, variants.get(candidate, edits))
+            return
+        for replacement, edit_cost in option_sets[index]:
+            if replacement:
+                chars.append(replacement)
+            emit(index + 1, chars, edits + edit_cost)
+            if replacement:
+                chars.pop()
+
+    emit(0, [], 0)
+    return sorted(variants.items(), key=lambda item: (item[1], item[0]))
+
+
+def _looks_like_terminal_seven(text: str, index: int) -> bool:
+    previous = text[index - 1] if index > 0 else ""
+    next_char = text[index + 1] if index + 1 < len(text) else ""
+    if next_char in {"", ")"}:
+        return True
+    if previous in {"-", "+", "#", "b"} and next_char in {"", ")"}:
+        return True
+    return False
+
+
+def _looks_like_minor_dash(text: str, index: int) -> bool:
+    previous = text[index - 1] if index > 0 else ""
+    next_char = text[index + 1] if index + 1 < len(text) else ""
+    return previous in {"b", "#", "5", "6", "8"} and next_char in {"1", "7"}
+
+
 @lru_cache(maxsize=32)
 def _candidate_symbols_for_roots(roots: tuple[str, ...]) -> tuple[str, ...]:
     candidates = []
@@ -207,6 +374,11 @@ def _candidate_symbols_for_roots(roots: tuple[str, ...]) -> tuple[str, ...]:
 
 def _comparison_text(text: str) -> str:
     token = normalize_text(text).strip().lower()
+    return "".join(char for char in token if not char.isspace())
+
+
+def _comparison_preserving_symbols(text: str) -> str:
+    token = normalize_text(text).strip()
     return "".join(char for char in token if not char.isspace())
 
 

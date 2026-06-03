@@ -182,6 +182,65 @@ the previous targeted-only numbers.
 The allowlist was kept. It recovered one additional Take The A Train token and
 did not show a clear runtime penalty in this ablation.
 
+## 2026-06-04 handwritten-style OCR repair benchmark
+
+Input:
+
+```text
+resources/sheet_music_metrics/afternoon_in_paris-john_lewis.png
+```
+
+Environment:
+
+- local Windows development machine
+- project virtualenv
+- CPU execution
+- no GPU accelerator detected
+- EasyOCR reader warmed before timing
+- benchmark reused saved `homr_processed.png` and `geometry.json` from a
+  temporary analysis run
+- benchmark isolated OCR extraction, visual filtering, and measure assignment;
+  HOMR was not rerun
+
+This benchmark measured the follow-up repair pass for handwriting-style chord
+fonts. The implementation added suspicious accepted-token repair,
+low-confidence uncertain chord diagnostics, and system-index-aware assignment
+for targeted OCR tokens.
+
+| Sample | Pipeline state | OCR+filter+assign time | Accepted before filters | Kept after filters | Rejected hits | Filtered hits | Uncertain rejected hits |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Afternoon in Paris | Previous candidate resolution | `14.464s` | `31` | `31` | `9` | `0` | `2` |
+| Afternoon in Paris | Suspicious accepted-token repair | `14.727s` | `33` | `33` | `7` | `0` | `4` |
+
+Corrected examples included:
+
+```text
+C-1  -> C-7
+61   -> G7
+G1   -> G7
+A-1  -> A-7
+E67  -> Eb7
+E57  -> Eb7
+B6-7 -> Bb-7
+B627 -> Bb-7
+F87  -> F#7
+Bbmrjt -> Bbmaj7
+Cait -> Cmaj7
+```
+
+The repair pass is a meaningful improvement on this hard sample without a
+noticeable warmed runtime regression. It is not a complete solution:
+low-confidence `Cmaj7` variants, `Abmaj7` as `Abm11`, `Cmaj7` as `Cm7`,
+`G7b9` as `C79`, parenthesized `(G7)` as `G9)`, and split `Bb` + `Ab7`
+remain unresolved.
+
+Regression check on the earlier saved samples:
+
+| Sample | Previous candidate resolution | Current repair pass |
+| --- | ---: | ---: |
+| Take The A Train | `16.144s`, `30` kept, `4` rejects | `15.848s`, `30` kept, `4` rejects |
+| Autumn Leaves | `16.330s`, `32` kept, `9` rejects | `15.869s`, `32` kept, `9` rejects |
+
 ## Timing results
 
 Cold-ish runs used separate Python processes, so each run included its own model
@@ -249,6 +308,8 @@ The main optimization target is still the EasyOCR stage:
   dominates the warm pipeline on CPU.
 - Candidate resolution improves recall and diagnostics, but it does not reduce
   EasyOCR runtime and made the latest OCR+filter benchmark modestly slower.
+- Handwritten-style suspicious-token repair improves common OCR confusions, but
+  it still does not solve all `maj7` variants or split-token cases.
 - Unusual chord placement can still require the full-page fallback.
 - OCR scale and preprocessing settings may still be more expensive than
   necessary for some inputs.
@@ -257,6 +318,10 @@ The main optimization target is still the EasyOCR stage:
 
 - Reuse the EasyOCR reader in the long-running API process.
 - Refine the targeted/full-page fallback thresholds with more reviewed samples.
+- Add a carefully bounded split-token merge for cases like `Bb` + `Ab7` only
+  after more hard samples confirm the pattern.
+- Investigate a limited handwriting-style rescue recognizer for unresolved
+  `maj7` symbols if rule-light repair stops improving.
 - Benchmark PaddleOCR recognition-only on the same targeted chord crops if a
   future dependency spike is approved.
 - Evaluate JAZZMUS after the final MusicVision benchmark as an external

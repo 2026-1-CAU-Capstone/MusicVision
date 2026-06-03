@@ -4,6 +4,115 @@ This file records the implementation changes made for the sheet-music chord
 processing branch in more detail than the architectural summary in
 `docs/sheet_music_chord_processing.md`.
 
+## 2026-06-04 - Handwritten-style chord OCR repair pass
+
+### Starting point
+
+`resources/sheet_music_metrics/afternoon_in_paris-john_lewis.png` exposed a
+different failure mode from the printed Take The A Train and Autumn Leaves
+benchmarks. HOMR geometry and targeted chord crops were mostly usable, but the
+handwritten-style font caused EasyOCR to return chord-shaped wrong text:
+
+```text
+C-7   -> C-1
+G7    -> G1 or 61
+A-7   -> A-1
+Eb7   -> E67 or E57
+Bb-7  -> B6-7 or B627
+F#7   -> F87
+Bbmaj7 -> Bbmrjt
+Cmaj7 -> Cait
+```
+
+Because many of those strings still passed the broad chord grammar, the earlier
+candidate resolver never saw them.
+
+### Implemented suspicious accepted-token repair
+
+`pipeline/chords/candidate_resolution.py` now treats accepted OCR text as
+suspicious when it does not match a common chord form. It then tries a small set
+of OCR-confusion repairs before accepting the token as-is:
+
+```text
+terminal 1 -> 7
+accidental-position 5/6 -> b
+accidental-position 8 -> #
+2 between accidental-like text and 7 -> -
+```
+
+The repair path is still bounded. Ambiguous strings such as `C79` and `G9)`
+remain assigned as their original OCR text instead of being forced into a
+guess.
+
+The auto-correction threshold was lowered from `0.78` to `0.75`, while the
+clear-winner margin stayed at `0.05`. The OCR confusion score also treats `r`
+as close to `a`, which made `Bbmrjt` resolve to `Bbmaj7` without loosening
+punctuation-only repairs.
+
+### Added low-confidence uncertain diagnostics
+
+Low-confidence OCR hits now run through the resolver before being rejected.
+They are still not assigned, but likely chord misses can expose
+`candidate_kind: "uncertain_chord"` with suggestions. For example, the hard
+sample now reports low-confidence `Ctin` as a chord-like uncertain hit rather
+than a plain confidence reject.
+
+### Preserved targeted system provenance
+
+`ChordToken` now carries an optional `system_index` from the targeted OCR crop.
+HOMR-geometry assignment prefers that index over nearest-y grouping. This fixed
+cases where a chord sitting between close systems was closer to the wrong staff
+center, such as `B627`/`E57` on the lower systems of Afternoon in Paris.
+
+### Results
+
+Benchmark used saved HOMR geometry from the temporary Afternoon in Paris
+analysis run. The EasyOCR reader was warmed before timing; HOMR was not rerun.
+
+| Sample | Pipeline state | OCR+filter+assign time | Kept tokens | Rejected hits | Uncertain rejected hits |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Afternoon in Paris | Previous candidate resolution | `14.464s` | `31` | `9` | `2` |
+| Afternoon in Paris | Suspicious accepted-token repair | `14.727s` | `33` | `7` | `4` |
+
+The improvement is meaningful but not complete. The pass corrected the common
+`1`/`7`, `5/6`/flat, and `8`/sharp confusions, recovered `Bbmaj7` from
+`Bbmrjt`, recovered one `Cmaj7` from `Cait`, and kept ambiguous between-system
+tokens on the correct visual system.
+
+Remaining hard failures:
+
+- several `Cmaj7` symbols still show up as low-confidence `Ctin`, `Coi1`,
+  `Can`, or `Cn+i`
+- `Abmaj7` can still become accepted as `Abm11`
+- `Cmaj7` can still become accepted as `Cm7`
+- `G7b9` can still become `C79`
+- parenthesized `(G7)` can still become `G9)`
+- split tokens such as `Bb` + `Ab7` are still not merged back into one chord
+
+### Regression check
+
+The earlier saved benchmark samples did not show a count regression:
+
+| Sample | Previous candidate resolution | Current repair pass |
+| --- | ---: | ---: |
+| Take The A Train | `16.144s`, `30` kept, `4` rejects | `15.848s`, `30` kept, `4` rejects |
+| Autumn Leaves | `16.330s`, `32` kept, `9` rejects | `15.869s`, `32` kept, `9` rejects |
+
+The Take The A Train run also corrected one previously retained `Fm47`-style
+misread to `Fmaj7`. Autumn Leaves kept the same count; some half-diminished
+spellings normalize to the compact `m7b5` form.
+
+### Test coverage
+
+Extended `tests/test_chord_candidate_resolution.py` for suspicious accepted
+chord repairs and ambiguous strings that should not auto-correct.
+
+Extended `tests/test_chord_ocr_backend.py` for low-confidence uncertain
+candidate diagnostics.
+
+Extended `tests/test_measure_assignment.py` for system-index-aware HOMR
+assignment.
+
 ## 2026-06-03 - Chord OCR candidate resolution and uncertain diagnostics
 
 ### Starting point

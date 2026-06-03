@@ -19,6 +19,8 @@ def test_candidate_resolution_fixes_observed_major_seventh_misreads() -> None:
         "Cm4t": "Cmaj7",
         "Fmajt": "Fmaj7",
         "Bbmai7": "Bbmaj7",
+        "Bbmrjt": "Bbmaj7",
+        "Cait": "Cmaj7",
         "Fm4i7": "Fmaj7",
         "Cm4jt": "Cmaj7",
     }
@@ -29,6 +31,34 @@ def test_candidate_resolution_fixes_observed_major_seventh_misreads() -> None:
         assert resolution.accepted is True
         assert resolution.auto_corrected is True
         assert resolution.text_norm == expected
+
+
+def test_candidate_resolution_repairs_suspicious_accepted_chords() -> None:
+    examples = {
+        "C-1": "C-7",
+        "G1": "G7",
+        "A-1": "A-7",
+        "E67": "Eb7",
+        "E57": "Eb7",
+        "B6-7": "Bb-7",
+        "B627": "Bb-7",
+        "F87": "F#7",
+    }
+
+    for raw_text, expected in examples.items():
+        resolution = resolve_chord_ocr_text(raw_text)
+
+        assert resolution.accepted is True
+        assert resolution.auto_corrected is True
+        assert resolution.text_norm == expected
+
+
+def test_candidate_resolution_keeps_ambiguous_suspicious_chords() -> None:
+    for raw_text in ("C79", "G9)"):
+        resolution = resolve_chord_ocr_text(raw_text)
+
+        assert resolution.accepted is True
+        assert resolution.auto_corrected is False
 
 
 def test_candidate_resolution_rejects_fragments_without_roots() -> None:

@@ -197,6 +197,29 @@ reported as an uncertain chord candidate:
 This gives callers a way to show or inspect likely chord OCR misses without
 silently assigning ambiguous text to a measure.
 
+The same resolver also reviews accepted OCR text that passes the broad chord
+grammar but does not look like a common chord form. This catches handwritten
+font confusions that would otherwise be silently assigned:
+
+```text
+C-1  -> C-7
+G1   -> G7
+A-1  -> A-7
+E67  -> Eb7
+B6-7 -> Bb-7
+B627 -> Bb-7
+F87  -> F#7
+```
+
+Low-confidence hits now run through the resolver before being rejected. They are
+not assigned as chords, but chord-like low-confidence hits can include
+`candidate_kind: "uncertain_chord"` and candidate suggestions.
+
+Targeted OCR tokens also keep their source `system_index`. During HOMR-geometry
+assignment, that index is preferred over nearest-y grouping so chords that sit
+between close staff systems stay attached to the system whose crop produced
+them.
+
 ### Geometry repair heuristics
 
 HOMR geometry remains the preferred source of truth, but the assignment stage

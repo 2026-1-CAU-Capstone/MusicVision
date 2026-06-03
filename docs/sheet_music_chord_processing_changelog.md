@@ -4,6 +4,357 @@ This file records the implementation changes made for the sheet-music chord
 processing branch in more detail than the architectural summary in
 `docs/sheet_music_chord_processing.md`.
 
+## 2026-06-04 - Handwritten maj7 diagnostics and split-token merge
+
+### Starting point
+
+After the suspicious accepted-token repair pass, Afternoon in Paris still had
+two OCR failure modes that were not worth handing to an LLM yet:
+
+- low-confidence handwritten-style `maj7` blobs such as `Ctin`, `Coi1`, `Can`,
+  `Alm4i1`, and `Cn+i`
+- a split `Bbmaj7` where EasyOCR returned touching tokens, `Bb` plus
+  `an7`/`Ab7`
+
+The accepted-token repair pass also still retained some wrong-but-valid-looking
+tokens, including `Abm11`, `Cm7`, `C79`, and `G9)`. Those are noted below as
+remaining failures.
+
+### Implemented diagnostic-first handwritten maj7 candidates
+
+`pipeline/chords/candidate_resolution.py` now has a
+`handwritten_major_seventh_candidate` suggestion path. It looks for compact
+root-plus-suffix strings where the suffix resembles a damaged handwritten
+`maj7` shape. Examples include:
+
+```text
+Ctin   -> possible Cmaj7
+Coi1   -> possible Cmaj7
+Can    -> possible Cmaj7
+Cn+i   -> possible Cmaj7
+Alm4i1 -> possible Abmaj7 or Amaj7
+```
+
+This path is intentionally diagnostic-first. A handwritten-major-seventh
+candidate can be emitted as an `uncertain_chord` suggestion, but it does not
+auto-assign a chord unless the existing near-valid candidate scoring also
+supports the same correction. This avoids turning every ambiguous handwritten
+blob into a silent chord assignment.
+
+### Implemented same-system split-token merge
+
+`pipeline/chords/easyocr_backend.py` now repairs one narrow split case after OCR
+token extraction. If a root-only token is immediately followed by a `maj7`-like
+tail fragment in the same targeted system crop, the backend merges the pair:
+
+```text
+Bb + an7/Ab7 -> Bbmaj7
+```
+
+The merge requires:
+
+- a root-only left token, such as `Bb`
+- a right token that looks like a damaged `maj7` tail
+- same `system_index` when both tokens have targeted OCR provenance
+- strong vertical overlap
+- a near-touching horizontal gap
+
+Separated chords are left unmerged.
+
+### Results
+
+Saved benchmark jobs:
+
+```text
+storage/jobs/bench-handwritten-ocr-split-merge-afternoon-in-paris-20260604
+storage/jobs/bench-handwritten-ocr-split-merge-take-the-a-train-20260604
+storage/jobs/bench-handwritten-ocr-split-merge-autumn-leaves-20260604
+```
+
+Each job includes `chord_assignments.json`, `chord_assignment_overlay.png`,
+`job_status.json`, copied HOMR artifacts, and
+`output/benchmark_metadata.json`.
+
+| Sample | Previous repair pass | Current split/diagnostic pass |
+| --- | ---: | ---: |
+| Afternoon in Paris | `14.727s`, `33` kept, `7` rejects, `4` uncertain | `14.730s`, `32` kept, `7` rejects, `5` uncertain |
+| Take The A Train | `15.848s`, `30` kept, `4` rejects, `0` uncertain | `14.637s`, `30` kept, `4` rejects, `2` uncertain |
+| Autumn Leaves | `15.869s`, `32` kept, `9` rejects, `1` uncertain | `15.400s`, `32` kept, `9` rejects, `1` uncertain |
+
+The Afternoon kept-token count dropped by one because the previous `Bb` plus
+`Ab7` false split became one `Bbmaj7` token. That is an accuracy improvement
+rather than a recall loss.
+
+The first saved Afternoon timing was `17.190s`, but three immediate warmed
+reruns measured `14.986s`, `14.835s`, and `14.730s`. The benchmark table uses
+the repeated warmed runtime because it better matches the established warmed
+OCR benchmark method.
+
+### Remaining failures
+
+This was a partial success, not a complete handwritten-font solution:
+
+- low-confidence `Ctin`, `Coi1`, `Can`, `Alm4i1`, and `Cn+i` are now surfaced
+  as uncertain candidates but are still not assigned
+- `Abmaj7` can still be retained as `Abm11`
+- `Cmaj7` can still be retained as `Cm7`
+- `G7b9` can still be retained as `C79`
+- parenthesized `(G7)` can still be retained as `G9)`
+
+Those accepted-but-wrong cases probably need either stronger visual/contextual
+evidence or a different recognizer strategy; the current pass deliberately does
+not force them.
+
+### Test coverage
+
+Extended `tests/test_chord_candidate_resolution.py` for handwritten
+major-seventh uncertainty and for preserving clear minor-seventh corrections.
+
+Extended `tests/test_chord_ocr_backend.py` for the split-token merge and for
+leaving separated chords unmerged.
+
+## 2026-06-04 - Handwritten-style chord OCR repair pass
+
+### Starting point
+
+`resources/sheet_music_metrics/afternoon_in_paris-john_lewis.png` exposed a
+different failure mode from the printed Take The A Train and Autumn Leaves
+benchmarks. HOMR geometry and targeted chord crops were mostly usable, but the
+handwritten-style font caused EasyOCR to return chord-shaped wrong text:
+
+```text
+C-7   -> C-1
+G7    -> G1 or 61
+A-7   -> A-1
+Eb7   -> E67 or E57
+Bb-7  -> B6-7 or B627
+F#7   -> F87
+Bbmaj7 -> Bbmrjt
+Cmaj7 -> Cait
+```
+
+Because many of those strings still passed the broad chord grammar, the earlier
+candidate resolver never saw them.
+
+### Implemented suspicious accepted-token repair
+
+`pipeline/chords/candidate_resolution.py` now treats accepted OCR text as
+suspicious when it does not match a common chord form. It then tries a small set
+of OCR-confusion repairs before accepting the token as-is:
+
+```text
+terminal 1 -> 7
+accidental-position 5/6 -> b
+accidental-position 8 -> #
+2 between accidental-like text and 7 -> -
+```
+
+The repair path is still bounded. Ambiguous strings such as `C79` and `G9)`
+remain assigned as their original OCR text instead of being forced into a
+guess.
+
+The auto-correction threshold was lowered from `0.78` to `0.75`, while the
+clear-winner margin stayed at `0.05`. The OCR confusion score also treats `r`
+as close to `a`, which made `Bbmrjt` resolve to `Bbmaj7` without loosening
+punctuation-only repairs.
+
+### Added low-confidence uncertain diagnostics
+
+Low-confidence OCR hits now run through the resolver before being rejected.
+They are still not assigned, but likely chord misses can expose
+`candidate_kind: "uncertain_chord"` with suggestions. For example, the hard
+sample now reports low-confidence `Ctin` as a chord-like uncertain hit rather
+than a plain confidence reject.
+
+### Preserved targeted system provenance
+
+`ChordToken` now carries an optional `system_index` from the targeted OCR crop.
+HOMR-geometry assignment prefers that index over nearest-y grouping. This fixed
+cases where a chord sitting between close systems was closer to the wrong staff
+center, such as `B627`/`E57` on the lower systems of Afternoon in Paris.
+
+### Results
+
+Benchmark used saved HOMR geometry from the temporary Afternoon in Paris
+analysis run. The EasyOCR reader was warmed before timing; HOMR was not rerun.
+
+| Sample | Pipeline state | OCR+filter+assign time | Kept tokens | Rejected hits | Uncertain rejected hits |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Afternoon in Paris | Previous candidate resolution | `14.464s` | `31` | `9` | `2` |
+| Afternoon in Paris | Suspicious accepted-token repair | `14.727s` | `33` | `7` | `4` |
+
+The improvement is meaningful but not complete. The pass corrected the common
+`1`/`7`, `5/6`/flat, and `8`/sharp confusions, recovered `Bbmaj7` from
+`Bbmrjt`, recovered one `Cmaj7` from `Cait`, and kept ambiguous between-system
+tokens on the correct visual system.
+
+Remaining hard failures:
+
+- several `Cmaj7` symbols still show up as low-confidence `Ctin`, `Coi1`,
+  `Can`, or `Cn+i`
+- `Abmaj7` can still become accepted as `Abm11`
+- `Cmaj7` can still become accepted as `Cm7`
+- `G7b9` can still become `C79`
+- parenthesized `(G7)` can still become `G9)`
+- split tokens such as `Bb` + `Ab7` are still not merged back into one chord
+
+### Regression check
+
+The earlier saved benchmark samples did not show a count regression:
+
+| Sample | Previous candidate resolution | Current repair pass |
+| --- | ---: | ---: |
+| Take The A Train | `16.144s`, `30` kept, `4` rejects | `15.848s`, `30` kept, `4` rejects |
+| Autumn Leaves | `16.330s`, `32` kept, `9` rejects | `15.869s`, `32` kept, `9` rejects |
+
+The Take The A Train run also corrected one previously retained `Fm47`-style
+misread to `Fmaj7`. Autumn Leaves kept the same count; some half-diminished
+spellings normalize to the compact `m7b5` form.
+
+### Test coverage
+
+Extended `tests/test_chord_candidate_resolution.py` for suspicious accepted
+chord repairs and ambiguous strings that should not auto-correct.
+
+Extended `tests/test_chord_ocr_backend.py` for low-confidence uncertain
+candidate diagnostics.
+
+Extended `tests/test_measure_assignment.py` for system-index-aware HOMR
+assignment.
+
+## 2026-06-03 - Chord OCR candidate resolution and uncertain diagnostics
+
+### Starting point
+
+The targeted chord-band OCR pass improved speed and reduced noise, but it still
+rejected real jazz chord symbols when EasyOCR misread the longer quality text.
+The most visible examples were major seventh chords on `Take_The_A_Train`:
+
+```text
+Cmaj7  -> Cm4it
+Fmaj7  -> Fm4T
+Cmaj7  -> Cm4t
+Fmaj7  -> Fmajt
+Bbmaj7 -> Bbmai7
+Fmaj7  -> Fm4i7
+Cmaj7  -> Cm4jt
+```
+
+There were also structural misses such as `C 7`, which EasyOCR detected as one
+text hit but the chord grammar rejected because of the internal space. Rejected
+hits already appeared in `chord_ocr.rejected_hits`, but they did not tell the
+caller when the rejected text was probably a chord-like miss.
+
+### Implemented bounded correction
+
+The first pass was intentionally not a broad hardcoded rulebase. The added
+corrections are structural and high confidence:
+
+```text
+C 7     -> C7
+Bb maj7 -> Bbmaj7
+C_7     -> C-7
+6m7     -> Gm7
+CM7     -> Cmaj7
+```
+
+This covers chord-component spacing, underscore/minor shorthand, the observed
+`G` root as `6` issue, and body casing. The first/root letter can remain
+uppercase, while chord-quality text is normalized to lowercase except for slash
+bass roots.
+
+### Added constrained OCR and candidate resolution
+
+`pipeline/chords/easyocr_backend.py` now calls EasyOCR with a chord-character
+allowlist. This constrains recognition to plausible chord-symbol characters
+without running any extra OCR passes.
+
+`pipeline/chords/candidate_resolution.py` adds a conservative candidate resolver
+for grammar-rejected OCR hits. It generates common valid chord candidates for
+the same likely root and scores them with weighted OCR-confusion costs. This is
+meant for families of errors such as `Cm4it` -> `Cmaj7`, not for one-off
+string replacements.
+
+The resolver accepts the best candidate only when it is above the score
+threshold and clearly ahead of the next-best candidate. Otherwise the hit stays
+rejected and is annotated as:
+
+```json
+{
+  "candidate_kind": "uncertain_chord",
+  "suggestions": [
+    {
+      "text_norm": "Am7b5",
+      "score": 0.663,
+      "reason": "near_valid_chord_candidate"
+    }
+  ]
+}
+```
+
+Rootless fragments such as `maj` and `sus` remain rejected instead of being
+assigned as standalone chords.
+
+### Results
+
+Benchmarks reused the same saved HOMR artifacts as the targeted-OCR benchmark.
+The EasyOCR reader was warmed before timing, and HOMR was not rerun.
+
+| Sample | Pipeline state | OCR+filter time | Kept tokens | Rejected hits | Uncertain rejected hits |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Take The A Train | Previous targeted OCR | `14.705s` | `21` | `14` | `0` |
+| Take The A Train | Candidate resolution | `16.144s` | `30` | `4` | `0` |
+| Autumn Leaves | Previous targeted OCR | `13.599s` | `29` | `12` | `0` |
+| Autumn Leaves | Candidate resolution | `16.330s` | `32` | `9` | `1` |
+
+The improvement is strongest on `Take_The_A_Train`, where the major seventh
+misreads became assigned chords and rejected OCR noise dropped. `Autumn Leaves`
+also kept more chords and surfaced one uncertain `Am7b5`-like reject for caller
+inspection.
+
+Saved benchmark job artifacts were written for later inspection:
+
+```text
+storage/jobs/bench-candidate-resolution-take-the-a-train-20260604
+storage/jobs/bench-candidate-resolution-autumn-leaves-20260604
+```
+
+Both jobs include current candidate-resolution chord assignments, diagnostic
+overlays, completed job status files, and `output/benchmark_metadata.json` with
+the previous targeted OCR versus candidate-resolution comparison numbers.
+
+The backward step is runtime: the final OCR+filter timings are about `1.4s`
+slower on `Take_The_A_Train` and about `2.7s` slower on `Autumn Leaves` than
+the previous targeted-only benchmark. They remain meaningfully faster than the
+legacy full-page OCR timings of `25.801s` and `24.747s`, but this should be
+watched on more samples.
+
+### Allowlist ablation
+
+The allowlist did not appear to be the main source of the runtime increase:
+
+| Mode | Take The A Train time | Take kept tokens | Autumn Leaves time | Autumn kept tokens |
+| --- | ---: | ---: | ---: | ---: |
+| With allowlist | `16.144s` | `30` | `16.330s` | `32` |
+| Without allowlist | `15.842s` | `29` | `16.465s` | `32` |
+
+The allowlist was kept because it had no clear runtime penalty in this ablation
+and recovered one additional Take The A Train token.
+
+### Test coverage
+
+Added `tests/test_chord_candidate_resolution.py` for:
+
+- spacing/minor-shorthand/root/casing structural corrections
+- observed major seventh OCR misreads
+- rejecting rootless `maj` and `sus` fragments
+- uncertain candidate diagnostics
+
+Extended `tests/test_chord_ocr_backend.py` for:
+
+- EasyOCR allowlist wiring
+- `uncertain_chord` reject payloads
+
 ## 2026-06-03 - Targeted chord-band OCR with full-page fallback
 
 ### Starting point

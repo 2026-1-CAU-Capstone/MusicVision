@@ -106,11 +106,12 @@ The image-only first pass lives under `pipeline/chords/`:
 
 Assignment behavior:
 
-1. assign each OCR token to the nearest HOMR system by y-position
-2. build measure intervals from the barlines for that system
-3. place each token into a measure by x-position
-4. estimate beat position within the measure where practical
-5. use the CV fallback only if HOMR geometry is missing, incomplete, or unusable
+1. assign targeted OCR tokens to their source HOMR system when available
+2. otherwise assign each OCR token to the nearest HOMR system by y-position
+3. build measure intervals from the barlines for that system
+4. place each token into a measure by x-position
+5. estimate beat position within the measure where practical
+6. use the CV fallback only if HOMR geometry is missing, incomplete, or unusable
 
 ### Targeted chord-band OCR
 
@@ -146,6 +147,97 @@ full_page
 targeted_only
 targeted_with_full_page_fallback
 ```
+
+### Chord OCR correction and uncertain candidates
+
+After EasyOCR returns text, the chord OCR path applies a bounded correction pass
+before measure assignment. The goal is to fix high-confidence OCR structure
+errors without turning the parser into a large per-song rulebase.
+
+The EasyOCR call is constrained with a chord-character allowlist. This keeps the
+recognizer focused on roots, lowercase chord-quality text, digits, accidentals,
+slash chords, parentheses, and minor shorthand. It does not add another OCR pass.
+
+The structural normalizer handles cases that are common and low risk:
+
+```text
+C 7     -> C7
+Bb maj7 -> Bbmaj7
+C_7     -> C-7
+6m7     -> Gm7
+CM7     -> Cmaj7
+```
+
+For harder OCR strings such as `Cm4it`, `Fm4T`, or `Bbmai7`, the pipeline does
+not use one-off string replacements. Instead,
+`pipeline/chords/candidate_resolution.py` compares the rejected text with a
+small set of valid common chord candidates for the same likely root. It uses
+weighted OCR-confusion costs for character-level mistakes such as `4` versus
+`a`, `i` versus `j`, and `t`/`z` versus `7`.
+
+A candidate is accepted only when it clears the score threshold and is clearly
+better than the next-best candidate. Otherwise the hit remains rejected but is
+reported as an uncertain chord candidate:
+
+```json
+{
+  "text": "Am76s)",
+  "text_norm": "Am76s)",
+  "reason": "failed chord grammar",
+  "candidate_kind": "uncertain_chord",
+  "suggestions": [
+    {
+      "text_norm": "Am7b5",
+      "score": 0.663,
+      "reason": "near_valid_chord_candidate"
+    }
+  ]
+}
+```
+
+This gives callers a way to show or inspect likely chord OCR misses without
+silently assigning ambiguous text to a measure.
+
+The same resolver also reviews accepted OCR text that passes the broad chord
+grammar but does not look like a common chord form. This catches handwritten
+font confusions that would otherwise be silently assigned:
+
+```text
+C-1  -> C-7
+G1   -> G7
+A-1  -> A-7
+E67  -> Eb7
+B6-7 -> Bb-7
+B627 -> Bb-7
+F87  -> F#7
+```
+
+Low-confidence hits now run through the resolver before being rejected. They are
+not assigned as chords, but chord-like low-confidence hits can include
+`candidate_kind: "uncertain_chord"` and candidate suggestions.
+
+For handwritten-style `maj7` symbols, the resolver also emits a specific
+`handwritten_major_seventh_candidate` suggestion when the text looks like a
+damaged major-seventh suffix, such as `Ctin`, `Coi1`, `Can`, or `Cn+i`. These
+suggestions are diagnostic-first: they do not auto-assign a chord unless the
+normal near-valid candidate path also supports the same correction.
+
+The OCR backend also has one bounded split-token repair for touching symbols in
+the same targeted system crop. If EasyOCR reads a root-only token followed
+immediately by a `maj7`-like tail fragment, the pair is merged into one chord
+token:
+
+```text
+Bb + an7/Ab7 -> Bbmaj7
+```
+
+The merge requires same-system provenance when available, strong vertical
+overlap, and a very small horizontal gap. Separated chords are left alone.
+
+Targeted OCR tokens also keep their source `system_index`. During HOMR-geometry
+assignment, that index is preferred over nearest-y grouping so chords that sit
+between close staff systems stay attached to the system whose crop produced
+them.
 
 ### Geometry repair heuristics
 
@@ -385,8 +477,8 @@ Example shape:
         "systems_total": 8,
         "usable_system_crop_count": 8,
         "estimated_visual_measures": 31,
-        "accepted_tokens_before_visual_filters": 21,
-        "rejected_hits": 14,
+        "accepted_tokens_before_visual_filters": 30,
+        "rejected_hits": 4,
         "systems_with_chords": 7
       },
       "fallback": {

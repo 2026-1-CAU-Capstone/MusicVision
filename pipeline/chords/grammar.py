@@ -32,6 +32,7 @@ def looks_like_chord(text: str) -> bool:
 
 _ROOT_FIXES: dict[str, str] = {
     "0": "G",
+    "6": "G",
     "8": "B",
     "1": "I",
     "4": "D",
@@ -67,6 +68,8 @@ def _ocr_correct(text: str) -> str:
         return text
 
     text = re.sub(r"\s*/\s*", "/", text)
+    text = re.sub(r"\s+", "", text)
+    text = text.replace("_", "-")
     text = text.rstrip(".,;:!|")
     text = re.sub(r"inaj", "maj", text, flags=re.IGNORECASE)
     chars = list(text)
@@ -95,6 +98,7 @@ def _ocr_correct(text: str) -> str:
 
     result = "".join(chars)
     result = re.sub(r"mn7$", "m7", result)
+    result = _canonicalize_ocr_chord_case(result)
     slash_match = re.search(r"/([a-gA-G0-9])", result)
     if slash_match:
         bass_char = slash_match.group(1)
@@ -105,6 +109,36 @@ def _ocr_correct(text: str) -> str:
         result = result[: slash_match.start(1)] + bass_fixed + result[slash_match.end(1) :]
 
     return result
+
+
+def _canonicalize_ocr_chord_case(text: str) -> str:
+    parts = text.split("/", 1)
+    main = _canonicalize_main_chord_case(parts[0])
+    if len(parts) == 1:
+        return main
+
+    bass = parts[1]
+    if not bass:
+        return f"{main}/"
+    return f"{main}/{bass[0].upper()}{bass[1:].lower()}"
+
+
+def _canonicalize_main_chord_case(text: str) -> str:
+    if not text:
+        return text
+
+    root_span = 1
+    if len(text) > 1 and text[1] in ("#", "b"):
+        root_span = 2
+
+    root = text[:root_span]
+    body = text[root_span:]
+    if body[:3].lower() == "maj":
+        body = f"maj{body[3:]}"
+    elif body.startswith("M"):
+        body = f"maj{body[1:]}"
+
+    return f"{root}{body.lower()}"
 
 
 def looks_like_chord_ocr(text: str) -> tuple[bool, str]:

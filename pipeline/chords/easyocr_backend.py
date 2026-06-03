@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 
-from pipeline.chords.grammar import looks_like_chord_ocr, normalize_text
+from pipeline.chords.candidate_resolution import resolve_chord_ocr_text
 from pipeline.chords.models import ChordToken, merge_close_values
 from pipeline.chords.ocr_common import preprocess_for_ocr, try_split_merged_token
 
@@ -14,6 +14,10 @@ _reader: Any | None = None
 _MIN_TARGETED_SYSTEM_COVERAGE = 0.50
 _MIN_TARGETED_SYSTEMS_WITH_CHORDS = 0.25
 _MIN_TARGETED_TOKENS_PER_MEASURE = 0.20
+_CHORD_OCR_ALLOWLIST = (
+    "ABCDEFGabcdefgijlmnorstux0123456789#b()/+-_ "
+    "\u00b0\u00f8\ue260\ue262\ue10d\ue10c"
+)
 
 
 @dataclass(frozen=True)
@@ -61,12 +65,14 @@ def extract_chord_tokens_ocr(
             ocr_scale=ocr_scale,
         )
     else:
-        result = _run_ocr_pass(
-            image,
-            min_confidence=min_confidence,
-            gpu=gpu,
-            ocr_scale=ocr_scale,
-            source="full_page",
+        result = _repair_ocr_pass_result(
+            _run_ocr_pass(
+                image,
+                min_confidence=min_confidence,
+                gpu=gpu,
+                ocr_scale=ocr_scale,
+                source="full_page",
+            )
         )
         strategy = {
             "mode": "full_page",
@@ -107,12 +113,14 @@ def _extract_with_targeted_regions(
     }
 
     if not regions:
-        full_page_result = _run_ocr_pass(
-            image,
-            min_confidence=min_confidence,
-            gpu=gpu,
-            ocr_scale=ocr_scale,
-            source="full_page",
+        full_page_result = _repair_ocr_pass_result(
+            _run_ocr_pass(
+                image,
+                min_confidence=min_confidence,
+                gpu=gpu,
+                ocr_scale=ocr_scale,
+                source="full_page",
+            )
         )
         strategy = {
             "mode": "full_page",
@@ -144,6 +152,7 @@ def _extract_with_targeted_regions(
         targeted_result.tokens.extend(region_result.tokens)
         targeted_result.rejects.extend(region_result.rejects)
 
+    targeted_result = _repair_ocr_pass_result(targeted_result)
     systems_with_chords = _systems_with_tokens(targeted_result.tokens, systems)
     targeted_strategy.update(
         {
@@ -168,14 +177,18 @@ def _extract_with_targeted_regions(
         }
         return targeted_result, strategy
 
-    full_page_result = _run_ocr_pass(
-        image,
-        min_confidence=min_confidence,
-        gpu=gpu,
-        ocr_scale=ocr_scale,
-        source="full_page",
+    full_page_result = _repair_ocr_pass_result(
+        _run_ocr_pass(
+            image,
+            min_confidence=min_confidence,
+            gpu=gpu,
+            ocr_scale=ocr_scale,
+            source="full_page",
+        )
     )
-    merged_tokens = _merge_ocr_tokens([*targeted_result.tokens, *full_page_result.tokens])
+    merged_tokens = _repair_split_chord_tokens(
+        _merge_ocr_tokens([*targeted_result.tokens, *full_page_result.tokens])
+    )
     strategy = {
         "mode": "targeted_with_full_page_fallback",
         "targeted": targeted_strategy,
@@ -223,11 +236,13 @@ def _run_ocr_pass(
         xs = [offset_x + point[0] * inverse_scale for point in points]
         ys = [offset_y + point[1] * inverse_scale for point in points]
         bbox = (float(min(xs)), float(min(ys)), float(max(xs)), float(max(ys)))
+        resolution = resolve_chord_ocr_text(raw_text)
 
         if confidence_value < min_confidence:
             rejects.append(
                 {
                     "text": raw_text,
+                    "text_norm": resolution.text_norm,
                     "bbox": list(bbox),
                     "conf": confidence_value,
                     "source": source,
@@ -239,18 +254,19 @@ def _run_ocr_pass(
                     "reason": (
                         f"confidence {confidence_value:.2f} < threshold {min_confidence:.2f}"
                     ),
+                    **resolution.uncertain_context(),
                 }
             )
             continue
 
-        passed, corrected = looks_like_chord_ocr(raw_text)
-        if passed:
+        if resolution.accepted:
             tokens.append(
                 ChordToken(
                     text_raw=raw_text,
-                    text_norm=normalize_text(corrected),
+                    text_norm=resolution.text_norm,
                     bbox=bbox,
                     confidence=confidence_value,
+                    system_index=system_index,
                 )
             )
             continue
@@ -259,6 +275,7 @@ def _run_ocr_pass(
             raw_text,
             bbox,
             confidence=confidence_value,
+            system_index=system_index,
         )
         if split_tokens:
             tokens.extend(split_tokens)
@@ -267,7 +284,7 @@ def _run_ocr_pass(
         rejects.append(
             {
                 "text": raw_text,
-                "text_norm": corrected,
+                "text_norm": resolution.text_norm,
                 "bbox": list(bbox),
                 "conf": confidence_value,
                 "source": source,
@@ -277,6 +294,7 @@ def _run_ocr_pass(
                     else {}
                 ),
                 "reason": "failed chord grammar",
+                **resolution.reject_context(),
             }
         )
 
@@ -284,7 +302,12 @@ def _run_ocr_pass(
 
 
 def _readtext(reader: Any, image: np.ndarray) -> list[Any]:
-    return reader.readtext(image, detail=1, paragraph=False)
+    return reader.readtext(
+        image,
+        detail=1,
+        paragraph=False,
+        allowlist=_CHORD_OCR_ALLOWLIST,
+    )
 
 
 def _usable_systems(
@@ -379,6 +402,12 @@ def _systems_with_tokens(
         return result
 
     for token in tokens:
+        if token.system_index is not None and any(
+            system_index == token.system_index for system_index, _bbox in systems
+        ):
+            result.add(token.system_index)
+            continue
+
         system_index, _bbox = min(
             systems,
             key=lambda item: abs(token.cy - item[1][1]),
@@ -444,6 +473,111 @@ def _median_gap(positions: list[float]) -> float:
     return sorted(gaps)[len(gaps) // 2]
 
 
+def _repair_ocr_pass_result(result: OCRPassResult) -> OCRPassResult:
+    return OCRPassResult(
+        tokens=_repair_split_chord_tokens(result.tokens),
+        rejects=result.rejects,
+    )
+
+
+def _repair_split_chord_tokens(tokens: list[ChordToken]) -> list[ChordToken]:
+    sorted_tokens = sorted(tokens, key=lambda current: (current.bbox[1], current.bbox[0]))
+    repaired: list[ChordToken] = []
+    index = 0
+
+    while index < len(sorted_tokens):
+        current = sorted_tokens[index]
+        if index + 1 < len(sorted_tokens):
+            merged = _split_chord_merge_candidate(current, sorted_tokens[index + 1])
+            if merged is not None:
+                repaired.append(merged)
+                index += 2
+                continue
+
+        repaired.append(current)
+        index += 1
+
+    return repaired
+
+
+def _split_chord_merge_candidate(
+    left: ChordToken,
+    right: ChordToken,
+) -> ChordToken | None:
+    if not _is_root_only(left.text_norm):
+        return None
+    if left.system_index is not None and right.system_index is not None:
+        if left.system_index != right.system_index:
+            return None
+    if _vertical_overlap_ratio(left.bbox, right.bbox) < 0.55:
+        return None
+
+    height = max(left.bbox[3] - left.bbox[1], right.bbox[3] - right.bbox[1], 1.0)
+    gap = right.bbox[0] - left.bbox[2]
+    if gap < -(height * 0.25) or gap > max(18.0, height * 0.35):
+        return None
+
+    merged_norm = _split_major_seventh_symbol(left, right)
+    if merged_norm is None:
+        return None
+
+    confidence_values = [
+        value for value in (left.confidence, right.confidence) if value is not None
+    ]
+    confidence = min(confidence_values) if confidence_values else None
+    system_index = left.system_index if left.system_index is not None else right.system_index
+    return ChordToken(
+        text_raw=f"{left.text_raw}{right.text_raw}",
+        text_norm=merged_norm,
+        bbox=(
+            min(left.bbox[0], right.bbox[0]),
+            min(left.bbox[1], right.bbox[1]),
+            max(left.bbox[2], right.bbox[2]),
+            max(left.bbox[3], right.bbox[3]),
+        ),
+        confidence=confidence,
+        system_index=system_index,
+    )
+
+
+def _is_root_only(text: str) -> bool:
+    token = text.strip()
+    if len(token) == 1:
+        return token in "ABCDEFG"
+    if len(token) == 2:
+        return token[0] in "ABCDEFG" and token[1] in {"b", "#"}
+    return False
+
+
+def _split_major_seventh_symbol(left: ChordToken, right: ChordToken) -> str | None:
+    for value in (right.text_raw, right.text_norm):
+        if _fragment_looks_like_major_seventh_tail(value):
+            return f"{left.text_norm}maj7"
+    return None
+
+
+def _fragment_looks_like_major_seventh_tail(text: str) -> bool:
+    fragment = "".join(
+        char.lower() for char in text if char.isalnum() or char in {"#", "+", "-"}
+    )
+    if len(fragment) < 2 or len(fragment) > 5:
+        return False
+    if fragment.startswith(("maj", "ma", "m4", "mr")):
+        return any(char in fragment for char in {"7", "1", "t"})
+    if fragment.startswith(("a", "ab", "an", "ai")):
+        return any(char in fragment for char in {"7", "1", "t"})
+    return False
+
+
+def _vertical_overlap_ratio(
+    first: tuple[float, float, float, float],
+    second: tuple[float, float, float, float],
+) -> float:
+    overlap = max(0.0, min(first[3], second[3]) - max(first[1], second[1]))
+    denominator = min(first[3] - first[1], second[3] - second[1])
+    return overlap / denominator if denominator > 0 else 0.0
+
+
 def _merge_ocr_tokens(tokens: list[ChordToken]) -> list[ChordToken]:
     merged: list[ChordToken] = []
     for token in sorted(tokens, key=lambda current: (current.bbox[1], current.bbox[0])):
@@ -454,6 +588,8 @@ def _merge_ocr_tokens(tokens: list[ChordToken]) -> list[ChordToken]:
 
         current = merged[duplicate_index]
         if (token.confidence or 0.0) > (current.confidence or 0.0):
+            if token.system_index is None:
+                token.system_index = current.system_index
             merged[duplicate_index] = token
 
     return merged

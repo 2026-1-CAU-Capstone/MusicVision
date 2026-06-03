@@ -239,15 +239,27 @@ def _tokens_by_nearest_system(
         return grouped_tokens
 
     for token in tokens:
-        best_index = min(
-            range(len(systems)),
-            key=lambda index: abs(token.cy - systems[index].y_center),
-        )
+        best_index = _preferred_system_index_for_token(token, systems)
         grouped_tokens[best_index].append(token)
 
     for grouped in grouped_tokens:
         grouped.sort(key=lambda token: (token.cx, token.cy))
     return grouped_tokens
+
+
+def _preferred_system_index_for_token(
+    token: ChordToken,
+    systems: list[SystemRow],
+) -> int:
+    if token.system_index is not None:
+        for index, system in enumerate(systems):
+            if system.index == token.system_index:
+                return index
+
+    return min(
+        range(len(systems)),
+        key=lambda index: abs(token.cy - systems[index].y_center),
+    )
 
 
 def _build_measures_from_boundaries(

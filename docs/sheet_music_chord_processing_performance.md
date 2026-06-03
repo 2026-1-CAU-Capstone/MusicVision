@@ -116,6 +116,187 @@ The padding change was reverted. The tighter chord-band crop kept the better
 runtime/noise balance, and the full-page fallback remains the safer recall path
 when targeted OCR is globally sparse.
 
+## 2026-06-03 chord OCR candidate-resolution benchmark
+
+Inputs:
+
+```text
+storage/jobs/bench-targeted-ocr-take-the-a-train-20260603/output
+storage/jobs/bench-targeted-ocr-autumn-leaves-20260603/output
+```
+
+Environment:
+
+- local Windows development machine
+- project virtualenv
+- CPU execution
+- no GPU accelerator detected
+- EasyOCR reader warmed before timing
+- benchmark reused saved `homr_processed.png` and `geometry.json`
+- benchmark isolated OCR extraction and visual filtering; HOMR was not rerun
+
+This benchmark measures the OCR accuracy follow-up after targeted chord-band
+OCR. The implementation added:
+
+- an EasyOCR chord-character allowlist
+- structural corrections for chord spacing, `_` minor shorthand, `6` as a
+  likely `G` root, and body casing
+- conservative candidate resolution for major-seventh-style OCR errors such as
+  `Cm4it` -> `Cmaj7`
+- `uncertain_chord` diagnostics for rejected text that is probably chord-like
+
+Saved benchmark jobs:
+
+```text
+storage/jobs/bench-candidate-resolution-take-the-a-train-20260604
+storage/jobs/bench-candidate-resolution-autumn-leaves-20260604
+```
+
+Each saved job includes the current candidate-resolution `chord_assignments.json`,
+`chord_assignment_overlay.png`, `job_status.json`, and
+`output/benchmark_metadata.json`.
+
+| Sample | Pipeline state | OCR+filter time | Accepted before filters | Kept after filters | Rejected hits | Filtered hits | Uncertain rejected hits |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Take The A Train | Previous targeted OCR | `14.705s` | `21` | `21` | `14` | `0` | `0` |
+| Take The A Train | Candidate resolution | `16.144s` | `30` | `30` | `4` | `0` | `0` |
+| Autumn Leaves | Previous targeted OCR | `13.599s` | `31` | `29` | `12` | `2` | `0` |
+| Autumn Leaves | Candidate resolution | `16.330s` | `34` | `32` | `9` | `2` | `1` |
+
+The candidate-resolution pass improved kept chord counts and reduced rejected
+OCR hits on both samples. The cost is runtime: Take The A Train became about
+`1.4s` slower than the previous targeted benchmark, and Autumn Leaves became
+about `2.7s` slower. Both remain faster than the legacy full-page OCR timings
+above, but the added runtime should be rechecked on the final benchmark set.
+
+### Allowlist ablation
+
+The allowlist was tested separately because the final benchmark was slower than
+the previous targeted-only numbers.
+
+| Mode | Take The A Train time | Take kept tokens | Autumn Leaves time | Autumn kept tokens |
+| --- | ---: | ---: | ---: | ---: |
+| With allowlist | `16.144s` | `30` | `16.330s` | `32` |
+| Without allowlist | `15.842s` | `29` | `16.465s` | `32` |
+
+The allowlist was kept. It recovered one additional Take The A Train token and
+did not show a clear runtime penalty in this ablation.
+
+## 2026-06-04 handwritten-style OCR repair benchmark
+
+Input:
+
+```text
+resources/sheet_music_metrics/afternoon_in_paris-john_lewis.png
+```
+
+Environment:
+
+- local Windows development machine
+- project virtualenv
+- CPU execution
+- no GPU accelerator detected
+- EasyOCR reader warmed before timing
+- benchmark reused saved `homr_processed.png` and `geometry.json` from a
+  temporary analysis run
+- benchmark isolated OCR extraction, visual filtering, and measure assignment;
+  HOMR was not rerun
+
+This benchmark measured the follow-up repair pass for handwriting-style chord
+fonts. The implementation added suspicious accepted-token repair,
+low-confidence uncertain chord diagnostics, and system-index-aware assignment
+for targeted OCR tokens.
+
+| Sample | Pipeline state | OCR+filter+assign time | Accepted before filters | Kept after filters | Rejected hits | Filtered hits | Uncertain rejected hits |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Afternoon in Paris | Previous candidate resolution | `14.464s` | `31` | `31` | `9` | `0` | `2` |
+| Afternoon in Paris | Suspicious accepted-token repair | `14.727s` | `33` | `33` | `7` | `0` | `4` |
+
+Corrected examples included:
+
+```text
+C-1  -> C-7
+61   -> G7
+G1   -> G7
+A-1  -> A-7
+E67  -> Eb7
+E57  -> Eb7
+B6-7 -> Bb-7
+B627 -> Bb-7
+F87  -> F#7
+Bbmrjt -> Bbmaj7
+Cait -> Cmaj7
+```
+
+The repair pass is a meaningful improvement on this hard sample without a
+noticeable warmed runtime regression. It is not a complete solution:
+low-confidence `Cmaj7` variants, `Abmaj7` as `Abm11`, `Cmaj7` as `Cm7`,
+`G7b9` as `C79`, parenthesized `(G7)` as `G9)`, and split `Bb` + `Ab7`
+remain unresolved.
+
+Regression check on the earlier saved samples:
+
+| Sample | Previous candidate resolution | Current repair pass |
+| --- | ---: | ---: |
+| Take The A Train | `16.144s`, `30` kept, `4` rejects | `15.848s`, `30` kept, `4` rejects |
+| Autumn Leaves | `16.330s`, `32` kept, `9` rejects | `15.869s`, `32` kept, `9` rejects |
+
+## 2026-06-04 handwritten maj7 diagnostics and split-token merge benchmark
+
+Inputs:
+
+```text
+storage/jobs/afternoon_in_paris-new_ocr_benchmark_20260604-0026/output
+storage/jobs/bench-candidate-resolution-take-the-a-train-20260604/output
+storage/jobs/bench-candidate-resolution-autumn-leaves-20260604/output
+```
+
+Environment:
+
+- local Windows development machine
+- project virtualenv
+- CPU execution
+- no GPU accelerator detected
+- EasyOCR reader warmed before timing
+- benchmark reused saved `homr_processed.png` and `geometry.json`
+- benchmark isolated OCR extraction, visual filtering, and measure assignment;
+  HOMR was not rerun
+
+This benchmark measured one final non-LLM pass for handwritten-style chord
+fonts. The implementation added diagnostic-first handwritten `maj7` suggestions
+for damaged suffixes such as `Ctin`, `Coi1`, `Can`, `Alm4i1`, and `Cn+i`, plus
+a bounded same-system split-token merge for cases like `Bb` plus `an7`/`Ab7`.
+
+Saved benchmark jobs:
+
+```text
+storage/jobs/bench-handwritten-ocr-split-merge-afternoon-in-paris-20260604
+storage/jobs/bench-handwritten-ocr-split-merge-take-the-a-train-20260604
+storage/jobs/bench-handwritten-ocr-split-merge-autumn-leaves-20260604
+```
+
+| Sample | Pipeline state | OCR+filter+assign time | Accepted before filters | Kept after filters | Rejected hits | Filtered hits | Uncertain rejected hits |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Afternoon in Paris | Suspicious accepted-token repair | `14.727s` | `33` | `33` | `7` | `0` | `4` |
+| Afternoon in Paris | Split merge + handwritten maj7 diagnostics | `14.730s` | `32` | `32` | `7` | `0` | `5` |
+| Take The A Train | Suspicious accepted-token repair | `15.848s` | `30` | `30` | `4` | `0` | `0` |
+| Take The A Train | Split merge + handwritten maj7 diagnostics | `14.637s` | `30` | `30` | `4` | `0` | `2` |
+| Autumn Leaves | Suspicious accepted-token repair | `15.869s` | `34` | `32` | `9` | `2` | `1` |
+| Autumn Leaves | Split merge + handwritten maj7 diagnostics | `15.400s` | `34` | `32` | `9` | `2` | `1` |
+
+Afternoon in Paris kept one fewer token because the previous split `Bb` plus
+`Ab7` pair is now one corrected `Bbmaj7`; this is an accuracy improvement, not
+a missing chord. The pass also exposes one more uncertain low-confidence
+handwritten-major-seventh candidate.
+
+The first saved Afternoon timing was `17.190s`, then three immediate warmed
+reruns measured `14.986s`, `14.835s`, and `14.730s`. The table uses the
+repeated warmed runtime so it matches the established warmed benchmark method.
+
+This pass should be kept as a bounded improvement, but it does not solve every
+handwritten-style font issue. Accepted-but-wrong tokens such as `Abm11`, `Cm7`,
+`C79`, and `G9)` remain.
+
 ## Timing results
 
 Cold-ish runs used separate Python processes, so each run included its own model
@@ -145,6 +326,7 @@ HOMR-only measurements on the same input:
 Generated benchmark artifacts:
 
 ```text
+storage/jobs/bench-candidate-resolution-*
 storage/jobs/bench-targeted-ocr-*
 storage/jobs/bench-chord-only-autumn-leaves*
 storage/jobs/bench-full-omr-autumn-leaves*
@@ -164,10 +346,14 @@ geometry-only takes about 7 seconds, while the full chord-only pipeline takes
 about 40 seconds. That leaves most of the runtime in printed chord OCR and its
 image preprocessing, not in HOMR visual measure extraction.
 
-Both the chord-only and full OMR-plus-chords runs assigned:
+Those older full-pipeline timing runs assigned:
 
 - `34` visual measures
 - `30` chord tokens
+
+The later candidate-resolution OCR-isolated benchmark kept `32` Autumn Leaves
+tokens on the same saved geometry, so treat the older `30` token count as
+historical context rather than the current best OCR result.
 
 ## Current bottleneck
 
@@ -176,6 +362,10 @@ The main optimization target is still the EasyOCR stage:
 - EasyOCR reader startup costs several seconds in a cold process.
 - The targeted chord-band pass reduces notation/header noise, but EasyOCR still
   dominates the warm pipeline on CPU.
+- Candidate resolution improves recall and diagnostics, but it does not reduce
+  EasyOCR runtime and made the latest OCR+filter benchmark modestly slower.
+- Handwritten-style suspicious-token repair improves common OCR confusions, but
+  it still does not solve all `maj7` variants or split-token cases.
 - Unusual chord placement can still require the full-page fallback.
 - OCR scale and preprocessing settings may still be more expensive than
   necessary for some inputs.
@@ -184,6 +374,10 @@ The main optimization target is still the EasyOCR stage:
 
 - Reuse the EasyOCR reader in the long-running API process.
 - Refine the targeted/full-page fallback thresholds with more reviewed samples.
+- Add a carefully bounded split-token merge for cases like `Bb` + `Ab7` only
+  after more hard samples confirm the pattern.
+- Investigate a limited handwriting-style rescue recognizer for unresolved
+  `maj7` symbols if rule-light repair stops improving.
 - Benchmark PaddleOCR recognition-only on the same targeted chord crops if a
   future dependency spike is approved.
 - Evaluate JAZZMUS after the final MusicVision benchmark as an external

@@ -203,3 +203,172 @@ def test_complete_targeted_ocr_skips_full_page_fallback(monkeypatch) -> None:
     assert strategy["mode"] == "targeted_only"
     assert strategy["fallback"]["triggered"] is False
     assert len(tokens) == 4
+
+
+def test_readtext_uses_chord_character_allowlist() -> None:
+    class FakeReader:
+        def __init__(self) -> None:
+            self.kwargs = {}
+
+        def readtext(self, _image, **kwargs):
+            self.kwargs = kwargs
+            return []
+
+    reader = FakeReader()
+    ocr_backend._readtext(reader, np.full((20, 20, 3), 255, dtype=np.uint8))
+
+    assert reader.kwargs["detail"] == 1
+    assert reader.kwargs["paragraph"] is False
+    assert "_" in reader.kwargs["allowlist"]
+    assert "-" in reader.kwargs["allowlist"]
+    assert "T" not in reader.kwargs["allowlist"]
+
+
+def test_rejected_near_chord_reports_uncertain_candidate_context(monkeypatch) -> None:
+    monkeypatch.setattr(ocr_backend, "preprocess_for_ocr", lambda image, scale: image)
+    monkeypatch.setattr(ocr_backend, "_get_reader", lambda gpu=False: object())
+    monkeypatch.setattr(
+        ocr_backend,
+        "_readtext",
+        lambda _reader, _image: [
+            (
+                [(10.0, 10.0), (40.0, 10.0), (40.0, 25.0), (10.0, 25.0)],
+                "Cx7",
+                0.88,
+            )
+        ],
+    )
+
+    result = ocr_backend._run_ocr_pass(
+        np.full((40, 60, 3), 255, dtype=np.uint8),
+        min_confidence=0.15,
+        gpu=False,
+        ocr_scale=1.0,
+        source="targeted_chord_band",
+        system_index=1,
+    )
+
+    assert result.tokens == []
+    assert result.rejects == [
+        {
+            "text": "Cx7",
+            "text_norm": "Cx7",
+            "bbox": [10.0, 10.0, 40.0, 25.0],
+            "conf": 0.88,
+            "source": "targeted_chord_band",
+            "system_index": 1,
+            "reason": "failed chord grammar",
+            "candidate_kind": "uncertain_chord",
+            "suggestions": [
+                {
+                    "text_norm": "C7",
+                    "score": 0.733,
+                    "reason": "near_valid_chord_candidate",
+                },
+                {
+                    "text_norm": "C+7",
+                    "score": 0.667,
+                    "reason": "near_valid_chord_candidate",
+                },
+                {
+                    "text_norm": "C-7",
+                    "score": 0.667,
+                    "reason": "near_valid_chord_candidate",
+                },
+            ],
+        }
+    ]
+
+
+def test_split_chord_repair_merges_touching_root_and_major_seventh_tail() -> None:
+    tokens = [
+        ChordToken(
+            "Bb",
+            "Bb",
+            (1000.0, 1520.0, 1072.0, 1598.0),
+            confidence=0.21,
+            system_index=6,
+        ),
+        ChordToken(
+            "an7",
+            "Ab7",
+            (1072.0, 1520.0, 1180.0, 1598.0),
+            confidence=0.21,
+            system_index=6,
+        ),
+    ]
+
+    repaired = ocr_backend._repair_split_chord_tokens(tokens)
+
+    assert len(repaired) == 1
+    assert repaired[0].text_raw == "Bban7"
+    assert repaired[0].text_norm == "Bbmaj7"
+    assert repaired[0].bbox == (1000.0, 1520.0, 1180.0, 1598.0)
+    assert repaired[0].system_index == 6
+
+
+def test_split_chord_repair_leaves_separated_chords_unmerged() -> None:
+    tokens = [
+        ChordToken("Bb", "Bb", (100.0, 20.0, 130.0, 40.0), confidence=0.8),
+        ChordToken("Ab7", "Ab7", (180.0, 20.0, 220.0, 40.0), confidence=0.8),
+    ]
+
+    repaired = ocr_backend._repair_split_chord_tokens(tokens)
+
+    assert [token.text_norm for token in repaired] == ["Bb", "Ab7"]
+
+
+def test_low_confidence_chord_like_hit_reports_uncertain_context(monkeypatch) -> None:
+    monkeypatch.setattr(ocr_backend, "preprocess_for_ocr", lambda image, scale: image)
+    monkeypatch.setattr(ocr_backend, "_get_reader", lambda gpu=False: object())
+    monkeypatch.setattr(
+        ocr_backend,
+        "_readtext",
+        lambda _reader, _image: [
+            (
+                [(10.0, 10.0), (40.0, 10.0), (40.0, 25.0), (10.0, 25.0)],
+                "C-1",
+                0.04,
+            )
+        ],
+    )
+
+    result = ocr_backend._run_ocr_pass(
+        np.full((40, 60, 3), 255, dtype=np.uint8),
+        min_confidence=0.15,
+        gpu=False,
+        ocr_scale=1.0,
+        source="targeted_chord_band",
+        system_index=2,
+    )
+
+    assert result.tokens == []
+    assert result.rejects == [
+        {
+            "text": "C-1",
+            "text_norm": "C-7",
+            "bbox": [10.0, 10.0, 40.0, 25.0],
+            "conf": 0.04,
+            "source": "targeted_chord_band",
+            "system_index": 2,
+            "reason": "confidence 0.04 < threshold 0.15",
+            "candidate_kind": "uncertain_chord",
+            "suggestions": [
+                {
+                    "text_norm": "C-7",
+                    "score": 0.95,
+                    "reason": "suspicious_accepted_chord_repair",
+                },
+                {
+                    "text_norm": "C-11",
+                    "score": 0.8,
+                    "reason": "suspicious_accepted_chord_repair",
+                },
+                {
+                    "text_norm": "C-13",
+                    "score": 0.8,
+                    "reason": "suspicious_accepted_chord_repair",
+                },
+            ],
+        }
+    ]

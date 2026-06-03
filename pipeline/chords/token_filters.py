@@ -60,6 +60,8 @@ def serialize_token(token: ChordToken) -> dict[str, Any]:
     }
     if token.confidence is not None:
         payload["conf"] = float(token.confidence)
+    if token.system_index is not None:
+        payload["system_index"] = int(token.system_index)
     return payload
 
 

@@ -1,7 +1,7 @@
-# Printed Chord OCR Progress Metrics
+# Sheet Music Chord Processing Progress Metrics
 
 This document records the measurable progress made on the Airegin reference
-image during the first MusicVision printed-chord OCR implementation.
+image during the first MusicVision sheet-music chord processing implementation.
 
 It is intentionally narrow:
 

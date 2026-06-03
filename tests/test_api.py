@@ -75,7 +75,15 @@ def test_process_omr_creates_outputs(
     monkeypatch.setattr(
         omr_service,
         "extract_chord_tokens_ocr",
-        lambda _image: ([], []),
+        lambda _image, **_kwargs: (
+            [],
+            [],
+            {
+                "mode": "full_page",
+                "targeted": {"attempted": False, "reason": "test"},
+                "fallback": {"triggered": False, "reason": None},
+            },
+        ),
     )
     monkeypatch.setattr(
         omr_service,
@@ -161,6 +169,11 @@ def test_process_omr_creates_outputs(
     ] == "1"
     assert chord_assignments_payload.json()["chord_ocr"] == {
         "backend": "easyocr",
+        "strategy": {
+            "mode": "full_page",
+            "targeted": {"attempted": False, "reason": "test"},
+            "fallback": {"triggered": False, "reason": None},
+        },
         "accepted_tokens": [],
         "rejected_hits": [],
         "filtered_hits": [],
@@ -290,6 +303,147 @@ def test_process_sheet_music_chords_rejects_unsupported_extensions(
     assert response.json() == {
         "detail": "Unsupported file extension. Allowed extensions: .jpeg, .jpg, .png"
     }
+
+
+def test_process_chord_chart_returns_chart(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run_chord_chart_pipeline(
+        *,
+        job_id: str,
+        input_file_path: Path,
+        intermediate_dir: Path,
+        output_dir: Path,
+        logs_dir: Path,
+    ) -> omr_service.ChordChartPipelineResult:
+        chord_chart = {
+            "job_id": job_id,
+            "source_file": input_file_path.name,
+            "source_type": "chord_chart",
+            "pipeline": "chart_grid_ocr",
+            "time_signature": {
+                "text_raw": "4/4",
+                "numerator": 4,
+                "denominator": 4,
+            },
+            "pages": [
+                {
+                    "page": 1,
+                    "assignment_source": "chart_grid_detection",
+                    "systems": [
+                        {
+                            "index": 1,
+                            "section": "A",
+                            "measures": [
+                                {
+                                    "index": 1,
+                                    "chords": [
+                                        {
+                                            "text_raw": "Ab-7b5",
+                                            "text_norm": "Abm7b5",
+                                            "beat": 1,
+                                        }
+                                    ],
+                                    "symbols": [],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "flow": {
+                "repeat_groups": [],
+                "endings": [],
+                "navigation": [],
+            },
+            "chart_ocr": {
+                "backend": "easyocr",
+                "accepted_tokens": [],
+                "rejected_hits": [],
+                "unassigned_tokens": [],
+                "detected_symbols": [],
+            },
+            "warnings": [],
+        }
+        chord_chart_path = output_dir / "chord_chart.json"
+        chord_chart_path.write_text(json.dumps(chord_chart), encoding="utf-8")
+        return omr_service.ChordChartPipelineResult(chord_chart_path=chord_chart_path)
+
+    monkeypatch.setattr(
+        omr_endpoint,
+        "run_chord_chart_pipeline",
+        fake_run_chord_chart_pipeline,
+    )
+
+    response = client.post(
+        "/chords/chart/process",
+        data={"job_id": "chart-job"},
+        files={"file": ("chart.png", BytesIO(b"fake-image"), "image/png")},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job_id"] == "chart-job"
+    assert payload["status"] == "completed"
+    assert payload["source_type"] == "chord_chart"
+    assert payload["chord_chart_path"] == "jobs/chart-job/output/chord_chart.json"
+    assert payload["chord_chart"]["source_type"] == "chord_chart"
+    assert (
+        payload["chord_chart"]["pages"][0]["systems"][0]["measures"][0]["chords"][0][
+            "text_norm"
+        ]
+        == "Abm7b5"
+    )
+
+    completed = client.get("/omr/jobs/chart-job")
+    assert completed.status_code == 200
+    assert completed.json() == {
+        "job_id": "chart-job",
+        "status": "completed",
+        "message": "Chord chart processing completed",
+        "chord_chart_path": "jobs/chart-job/output/chord_chart.json",
+    }
+
+    chart_file = client.get("/omr/jobs/chart-job/chord-chart")
+    assert chart_file.status_code == 200
+    assert chart_file.json()["source_type"] == "chord_chart"
+    assert chart_file.headers["content-type"] == "application/json"
+
+
+def test_process_chord_chart_rejects_existing_job_id(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    existing_job_dir = tmp_path / "jobs" / "chart-job"
+    existing_job_dir.mkdir(parents=True)
+    pipeline_called = False
+
+    def fake_run_chord_chart_pipeline(**_kwargs: object) -> None:
+        nonlocal pipeline_called
+        pipeline_called = True
+
+    monkeypatch.setattr(
+        omr_endpoint,
+        "run_chord_chart_pipeline",
+        fake_run_chord_chart_pipeline,
+    )
+
+    response = client.post(
+        "/chords/chart/process",
+        data={"job_id": "chart-job"},
+        files={"file": ("chart.png", BytesIO(b"fake-image"), "image/png")},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": (
+            "job_id already exists. Use a new job_id to preserve existing "
+            "job artifacts."
+        )
+    }
+    assert pipeline_called is False
 
 
 def test_process_omr_rejects_unsupported_extensions(client: TestClient) -> None:
@@ -450,6 +604,178 @@ def test_prod_process_omr_requires_configured_callback(
 
     assert response.status_code == 503
     assert response.json() == {"detail": "OMR_CALLBACK_URL is not configured."}
+
+
+def test_dev_process_chord_chart_requires_api_key_configuration(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(omr_endpoint, "OMR_API_KEY", None)
+
+    response = client.post(
+        "/chords/chart/dev/process",
+        files={"file": ("chart.png", BytesIO(b"fake-image"), "image/png")},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "OMR API key is not configured."}
+
+
+def test_dev_process_chord_chart_records_failed_background_job(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run_chord_chart_pipeline(**_kwargs: object) -> None:
+        raise RuntimeError("chart pipeline failed")
+
+    callbacks: list[tuple[str, dict[str, object]]] = []
+
+    def fake_post_job_callback(
+        callback_url: str,
+        payload: dict[str, object],
+    ) -> None:
+        callbacks.append((callback_url, payload))
+
+    monkeypatch.setattr(omr_endpoint, "OMR_API_KEY", "omr-secret")
+    monkeypatch.setattr(
+        omr_endpoint,
+        "run_chord_chart_pipeline",
+        fake_run_chord_chart_pipeline,
+    )
+    monkeypatch.setattr(omr_endpoint, "_post_job_callback", fake_post_job_callback)
+
+    response = client.post(
+        "/chords/chart/dev/process",
+        headers={"X-OMR-API-Key": "omr-secret"},
+        data={
+            "job_id": "failed-chart-job",
+            "callback_url": "https://backend.example/chart-callbacks",
+        },
+        files={"file": ("chart.png", BytesIO(b"fake-image"), "image/png")},
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "job_id": "failed-chart-job",
+        "status": "queued",
+        "message": "Chord chart processing queued",
+    }
+
+    failed = client.get(
+        "/omr/jobs/failed-chart-job",
+        headers={"X-OMR-API-Key": "omr-secret"},
+    )
+    assert failed.status_code == 200
+    assert failed.json() == {
+        "job_id": "failed-chart-job",
+        "status": "failed",
+        "message": "Chord chart processing failed",
+        "error": "chart pipeline failed",
+    }
+    assert callbacks == [
+        (
+            "https://backend.example/chart-callbacks",
+            {
+                "job_id": "failed-chart-job",
+                "status": "failed",
+                "message": "Chord chart processing failed",
+                "error": "chart pipeline failed",
+            },
+        )
+    ]
+
+
+def test_prod_process_chord_chart_rejects_untrusted_callback_host(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(omr_endpoint, "OMR_API_KEY", "omr-secret")
+    monkeypatch.setattr(
+        omr_endpoint,
+        "OMR_CALLBACK_URL",
+        "https://backend.example/fixed-omr-callback",
+    )
+
+    response = client.post(
+        "/chords/chart/prod/process",
+        headers={"X-OMR-API-Key": "omr-secret"},
+        data={"callback_url": "https://other.example/chart-callback"},
+        files={"file": ("chart.png", BytesIO(b"fake-image"), "image/png")},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": (
+            "callback_url host is not allowed. "
+            "It must match the configured OMR_CALLBACK_URL host."
+        )
+    }
+
+
+def test_prod_process_chord_chart_uses_domain_validated_request_callback(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    callbacks: list[tuple[str, dict[str, object]]] = []
+
+    def fake_run_chord_chart_pipeline(
+        *,
+        job_id: str,
+        input_file_path: Path,
+        intermediate_dir: Path,
+        output_dir: Path,
+        logs_dir: Path,
+    ) -> omr_service.ChordChartPipelineResult:
+        chord_chart_path = output_dir / "chord_chart.json"
+        chord_chart_path.write_text('{"source_type":"chord_chart"}', encoding="utf-8")
+        return omr_service.ChordChartPipelineResult(chord_chart_path=chord_chart_path)
+
+    def fake_post_job_callback(
+        callback_url: str,
+        payload: dict[str, object],
+    ) -> None:
+        callbacks.append((callback_url, payload))
+
+    monkeypatch.setattr(omr_endpoint, "OMR_API_KEY", "omr-secret")
+    monkeypatch.setattr(
+        omr_endpoint,
+        "OMR_CALLBACK_URL",
+        "https://backend.example/fixed-omr-callback",
+    )
+    monkeypatch.setattr(
+        omr_endpoint,
+        "run_chord_chart_pipeline",
+        fake_run_chord_chart_pipeline,
+    )
+    monkeypatch.setattr(omr_endpoint, "_post_job_callback", fake_post_job_callback)
+
+    response = client.post(
+        "/chords/chart/prod/process",
+        headers={"X-OMR-API-Key": "omr-secret"},
+        data={
+            "job_id": "callback-chart-job",
+            "callback_url": "https://backend.example/chart-callback",
+        },
+        files={"file": ("chart.png", BytesIO(b"fake-image"), "image/png")},
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "job_id": "callback-chart-job",
+        "status": "queued",
+        "message": "Chord chart processing queued",
+    }
+    assert callbacks == [
+        (
+            "https://backend.example/chart-callback",
+            {
+                "job_id": "callback-chart-job",
+                "status": "completed",
+                "message": "Chord chart processing completed",
+                "chord_chart_path": "jobs/callback-chart-job/output/chord_chart.json",
+            },
+        )
+    ]
 
 
 def test_omr_api_key_is_required_when_configured(
@@ -620,3 +946,10 @@ def test_get_job_chord_assignments_returns_404_when_missing(client: TestClient) 
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Chord assignments not found"}
+
+
+def test_get_job_chord_chart_returns_404_when_missing(client: TestClient) -> None:
+    response = client.get("/omr/jobs/missing-job/chord-chart")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Chord chart not found"}

@@ -28,18 +28,33 @@ stores `chord_assignments.json`. It runs HOMR visual geometry detection only and
 skips TrOMR/MusicXML generation, so its response does not include a MusicXML path
 and its alignment status is `visual_only`.
 
+`POST /chords/chart/process` is the synchronous chord-chart endpoint for clean
+grid charts. It accepts the same raster image uploads, skips HOMR, detects chart
+rows/measures from barlines, parses chord symbols plus chart-flow symbols, returns
+the structured chart inline, and stores `chord_chart.json`.
+
+`POST /chords/chart/dev/process` and `POST /chords/chart/prod/process` are the
+async chord-chart endpoints. They queue the same chart pipeline and return
+`202 Accepted`. Both require `X-OMR-API-Key`; the prod endpoint also requires a
+request `callback_url` whose host matches the configured `OMR_CALLBACK_URL`
+host.
+
 Async processing is exposed through explicit dev/prod endpoints:
 
 ```text
 POST /omr/dev/process
 POST /omr/prod/process
+POST /chords/chart/dev/process
+POST /chords/chart/prod/process
 ```
 
 Both async endpoints save the upload, queue the job, and return `202 Accepted`.
 Callers may poll the job-status endpoint, and callback delivery can be used for
 completion/failure events.
 
-In production, Spring Boot should use `POST /omr/prod/process`, which requires
+In production, Spring Boot should use the prod endpoint for the selected source
+type: `POST /omr/prod/process` for OMR/sheet-music processing or
+`POST /chords/chart/prod/process` for chart processing. Prod endpoints require
 API keys and a request `callback_url` whose host matches the configured
 `OMR_CALLBACK_URL` host. See
 [`security.md`](security.md).
@@ -50,6 +65,7 @@ The main outputs are:
 | --- | --- |
 | `score.musicxml` | HOMR note / notation result |
 | `chord_assignments.json` | Printed chord symbols assigned to visual measures |
+| `chord_chart.json` | Chord-chart grid, chords, repeats, endings, and navigation |
 
 The important integration guarantee is the measure-alignment block inside
 `chord_assignments.json`:
@@ -82,9 +98,13 @@ POST /omr/process              # legacy sync
 POST /omr/dev/process          # async, request callback allowed
 POST /omr/prod/process         # async, domain-validated callback required
 POST /chords/sheet-music/process
+POST /chords/chart/process
+POST /chords/chart/dev/process
+POST /chords/chart/prod/process
 GET  /omr/jobs/{job_id}
 GET  /omr/jobs/{job_id}/musicxml
 GET  /omr/jobs/{job_id}/chord-assignments
+GET  /omr/jobs/{job_id}/chord-chart
 ```
 
 Job statuses are:

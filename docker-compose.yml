@@ -5,6 +5,7 @@ services:
       args:
         PRELOAD_HOMR_MODELS: "true"
         PRELOAD_EASYOCR_MODELS: "false"
+        INSTALL_PADDLEOCR_RESCUE: ${INSTALL_PADDLEOCR_RESCUE:-false}
     container_name: musicvision-omr
     environment:
       APP_ENV: ${APP_ENV:-prod}
@@ -16,6 +17,10 @@ services:
       PORT: "8000"
       EASYOCR_MODULE_PATH: /models/easyocr
       TORCH_HOME: /models/torch
+      MUSICVISION_PADDLEOCR_RESCUE_MODE: ${MUSICVISION_PADDLEOCR_RESCUE_MODE:-off}
+      MUSICVISION_PADDLEOCR_PYTHON: ${MUSICVISION_PADDLEOCR_PYTHON:-/opt/paddleocr-venv/bin/python}
+      MUSICVISION_PADDLEOCR_CACHE_ROOT: ${MUSICVISION_PADDLEOCR_CACHE_ROOT:-/models/paddleocr}
+      PADDLE_PDX_CACHE_HOME: /models/paddlex
     ports:
       - "8000:8000"
     volumes:

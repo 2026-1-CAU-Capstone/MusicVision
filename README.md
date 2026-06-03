@@ -85,6 +85,18 @@ coordinate-space rules are documented in:
 docs/sheet_music_chord_processing.md
 ```
 
+Optional handwritten-style chord rescue can be enabled with an isolated
+PaddleOCR virtualenv so the main HOMR/EasyOCR environment keeps its NumPy
+version:
+
+```powershell
+$env:MUSICVISION_PADDLEOCR_PYTHON = "$env:TEMP\musicvision-paddleocr-venv\Scripts\python.exe"
+$env:MUSICVISION_PADDLEOCR_RESCUE_MODE = "adjudicated"
+```
+
+Leave `MUSICVISION_PADDLEOCR_RESCUE_MODE` unset or set to `off` to use the
+default EasyOCR-only production path.
+
 Consumer-facing API integration docs for the Spring Boot backend and frontend are
 in:
 

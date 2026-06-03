@@ -378,8 +378,9 @@ The main optimization target is still the EasyOCR stage:
   after more hard samples confirm the pattern.
 - Investigate a limited handwriting-style rescue recognizer for unresolved
   `maj7` symbols if rule-light repair stops improving.
-- Benchmark PaddleOCR recognition-only on the same targeted chord crops if a
-  future dependency spike is approved.
+- Use the saved PaddleOCR bakeoff and hybrid-rescue results in
+  `docs/handwritten_chord_recognizer_bakeoff.md` as the current reference before
+  considering production integration.
 - Evaluate JAZZMUS after the final MusicVision benchmark as an external
   handwritten jazz lead-sheet reference.
 - Keep synthetic jazz-font fine-tuning as future research; it is likely useful

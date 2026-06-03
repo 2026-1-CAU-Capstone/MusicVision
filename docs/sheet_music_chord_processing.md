@@ -14,10 +14,14 @@ upload
       -> score.musicxml
       -> geometry.json
       -> homr_processed.png
+  -> clean redundant single-staff clefs in score.musicxml
   -> run printed chord OCR on homr_processed.png
   -> assign chord tokens to measures
       -> prefer HOMR geometry
       -> fall back to CV barline detection only when needed
+  -> detect visual ending brackets above staff systems
+  -> align visual measures to MusicXML measures
+  -> write MusicXML ending start/stop barlines when alignment is safe
   -> render chord_assignment_overlay.png
   -> write enriched chord_assignments.json
 ```
@@ -41,13 +45,38 @@ Chord OCR also runs on `homr_processed.png`, so OCR boxes and HOMR geometry alig
 directly. The pipeline does not mix those processed coordinates with original
 upload coordinates.
 
+## MusicXML structure postprocess
+
+The full `/omr/process` pipeline keeps HOMR as the MusicXML generator, then
+applies two conservative MusicVision postprocesses to `score.musicxml`.
+
+First, `clean_single_staff_redundant_clefs()` removes later `<clef>` entries when
+the output appears to be a single-staff lead sheet. It refuses to run on
+multi-staff output by checking MusicXML `<staves>` values and numbered clefs, so
+piano-style scores keep their legitimate staff clefs.
+
+Second, `detect_ending_markers()` looks for first/second-ending brackets in
+`homr_processed.png`. The detector searches the band above each visual system,
+keeps long horizontal marks with a left bracket hook, rejects candidates too
+close to the staff, and maps accepted brackets back to visual measure boxes.
+Those markers are stored on affected measures as `form_markers`.
+
+After measure alignment adds `musicxml_measure_number` to visual measures,
+`apply_ending_markers_to_musicxml()` writes matching MusicXML `<ending>`
+start/stop barlines. If alignment cannot provide both the start and end MusicXML
+measure numbers, that marker is left out rather than guessed.
+
+The resulting `chord_assignments.json` records this work in
+`musicxml_postprocess`, including removed clef count, detected visual endings,
+and added MusicXML ending elements.
+
 ## HOMR sidecar artifacts
 
-For each successful job, HOMR now writes:
+For each successful full OMR job, the pipeline writes:
 
 | Artifact | Purpose |
 | --- | --- |
-| `score.musicxml` | Existing HOMR musical output |
+| `score.musicxml` | HOMR musical output after MusicVision clef/ending postprocess |
 | `geometry.json` | Visual score geometry for downstream assignment |
 | `homr_processed.png` | Exact processed image used for geometry detection |
 | `chord_assignment_overlay.png` | Diagnostic view of measure assignment and OCR decisions |
@@ -280,6 +309,19 @@ Example shape:
   "geometry_file": "geometry.json",
   "processed_image_file": "homr_processed.png",
   "overlay_file": "chord_assignment_overlay.png",
+  "musicxml_postprocess": {
+    "removed_clefs": 6,
+    "detected_endings": [
+      {
+        "type": "ending",
+        "number": 1,
+        "start_measure_index": 10,
+        "end_measure_index": 10,
+        "source": "visual_ending_bracket_detection"
+      }
+    ],
+    "added_endings": 4
+  },
   "measure_alignment": {
     "status": "aligned",
     "musicxml_measure_count": 45,
@@ -320,6 +362,13 @@ Example shape:
                   "text_raw": "Dm7",
                   "text_norm": "Dm7",
                   "beat": 2
+                }
+              ],
+              "form_markers": [
+                {
+                  "type": "ending",
+                  "number": 1,
+                  "source": "visual_ending_bracket_detection"
                 }
               ]
             }

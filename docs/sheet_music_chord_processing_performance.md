@@ -23,6 +23,33 @@ Environment:
 
 These timings are local measurements, not a general production benchmark.
 
+## 2026-06-03 Take The A Train OMR structure postprocess
+
+Input:
+
+```text
+resources/Take_The_A_Train.png
+```
+
+Environment:
+
+- local Windows development machine
+- project virtualenv
+- CPU execution
+- no GPU accelerator detected
+- single-page raster input
+- benchmark runs used temporary directories and deleted results afterward
+
+| Pipeline state | Time | Clefs in MusicXML | MusicXML endings |
+| --- | ---: | ---: | ---: |
+| Before clef/ending postprocess | `47.036s` | `7` | `0` |
+| After clef/ending postprocess | `44.500s` | `1` | `4` |
+
+The after run detected two visual ending markers and wrote start/stop MusicXML
+endings for numbers `1` and `2`. The runtime difference should be treated as
+normal local run-to-run variance; the added postprocess is small compared with
+HOMR and EasyOCR.
+
 ## Timing results
 
 Cold-ish runs used separate Python processes, so each run included its own model

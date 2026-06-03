@@ -239,6 +239,53 @@ assignment, that index is preferred over nearest-y grouping so chords that sit
 between close staff systems stay attached to the system whose crop produced
 them.
 
+### Optional PaddleOCR rescue
+
+The production sheet-music pipeline can optionally run a PaddleOCR rescue pass
+after EasyOCR and before visual filtering/measure assignment. This path is
+off by default.
+
+PaddleOCR is launched as an isolated subprocess so it does not share the main
+HOMR/EasyOCR virtualenv. This avoids the current NumPy conflict: HOMR requires
+the repo venv's newer NumPy range, while PaddleOCR/PaddleX currently requires a
+lower one.
+
+Enable it by pointing MusicVision at a separate PaddleOCR Python executable:
+
+```powershell
+$env:MUSICVISION_PADDLEOCR_PYTHON = "$env:TEMP\musicvision-paddleocr-venv\Scripts\python.exe"
+$env:MUSICVISION_PADDLEOCR_RESCUE_MODE = "adjudicated"
+```
+
+Supported modes:
+
+| Mode | Behavior |
+| --- | --- |
+| `off` | default EasyOCR-only behavior |
+| `additions` | add safe Paddle-only chords, keep EasyOCR replacements disabled |
+| `adjudicated` | add safe Paddle-only chords and apply conservative same-location replacement repairs |
+
+Optional tuning variables:
+
+| Variable | Default |
+| --- | ---: |
+| `MUSICVISION_PADDLEOCR_TIMEOUT_SECONDS` | `120` |
+| `MUSICVISION_PADDLEOCR_ACCEPTED_CONFIDENCE_THRESHOLD` | `0.50` |
+| `MUSICVISION_PADDLEOCR_MIN_CONFIDENCE` | `0.15` |
+| `MUSICVISION_PADDLEOCR_PADDING_X` | `36` |
+| `MUSICVISION_PADDLEOCR_PADDING_Y` | `28` |
+
+The worker writes `paddleocr_rescue_request.json` and
+`paddleocr_rescue_response.json` into the job output directory. If the worker
+times out or fails, the pipeline falls back to the original EasyOCR tokens and
+records a disabled `chord_ocr.paddleocr_rescue` diagnostic instead of failing
+the whole job.
+
+When enabled, `chord_ocr.backend` is `easyocr+paddleocr_rescue`, and
+`chord_ocr.paddleocr_rescue` records rescue regions, Paddle hits, safe
+additions, suppressed additions, replacement candidates, applied replacement
+decisions, and candidate groups.
+
 ### Geometry repair heuristics
 
 HOMR geometry remains the preferred source of truth, but the assignment stage
@@ -667,6 +714,7 @@ Included:
 
 - raster image inputs already supported by MusicVision
 - EasyOCR printed chord extraction
+- optional isolated PaddleOCR rescue for handwritten-style chord fonts
 - HOMR-geometry-first measure assignment
 - CV barline fallback
 
@@ -676,8 +724,7 @@ Intentionally deferred:
 - TrOCR support
 - HOMR in-process refactor
 - reconstructing original-upload coordinates from processed-image coordinates
-- broad OCR recovery when EasyOCR drops characters entirely, such as a missing
-  trailing `7`
+- broad OCR recovery beyond the bounded PaddleOCR rescue candidate set
 
 For a chronological record of the implementation changes and verification
 results, see `docs/sheet_music_chord_processing_changelog.md`.

@@ -12,6 +12,7 @@ RUN apt-get update \
         curl \
         libgl1 \
         libglib2.0-0 \
+        libgomp1 \
         libxcb1 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -23,8 +24,16 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch torchvision \
     && pip install --no-cache-dir -r requirements.txt
 
+ARG INSTALL_PADDLEOCR_RESCUE=false
+RUN if [ "$INSTALL_PADDLEOCR_RESCUE" = "true" ]; then \
+        python -m venv /opt/paddleocr-venv \
+        && /opt/paddleocr-venv/bin/pip install --no-cache-dir --upgrade pip \
+        && /opt/paddleocr-venv/bin/pip install --no-cache-dir paddleocr==3.6.0 paddlepaddle==3.3.1; \
+    fi
+
 COPY app ./app
 COPY pipeline ./pipeline
+COPY scripts ./scripts
 COPY time_sig_cnn ./time_sig_cnn
 
 ARG PRELOAD_HOMR_MODELS=true
@@ -35,6 +44,7 @@ RUN if [ "$PRELOAD_EASYOCR_MODELS" = "true" ]; then python -c "import easyocr; e
 
 RUN useradd --create-home --shell /usr/sbin/nologin appuser \
     && mkdir -p /app/storage /models \
+    && if [ -d /opt/paddleocr-venv ]; then chown -R appuser:appuser /opt/paddleocr-venv; fi \
     && chown -R appuser:appuser /app /models
 
 USER appuser

@@ -11,6 +11,7 @@ from pipeline.chords.easyocr_backend import extract_chord_tokens_ocr
 from pipeline.chords.measure_assignment import assign_chords_to_measures
 from pipeline.chords.ocr_common import load_rgb_image
 from pipeline.chords.overlay import write_chord_assignment_overlay
+from pipeline.chords.paddleocr_rescue import maybe_apply_paddleocr_rescue
 from pipeline.chords.token_filters import filter_probable_non_chords, serialize_token
 from pipeline.export import export_chord_assignments_json, export_chord_chart_json
 from pipeline.homr_artifacts import load_geometry_json
@@ -75,6 +76,13 @@ def run_omr_pipeline(
         geometry=geometry,
         return_strategy=True,
     )
+    chord_tokens, ocr_rejects, paddleocr_rescue = maybe_apply_paddleocr_rescue(
+        processed_image_path=homr_artifacts.processed_image_path,
+        geometry=geometry,
+        tokens=chord_tokens,
+        rejects=ocr_rejects,
+        output_dir=output_dir,
+    )
     chord_tokens, filtered_hits = filter_probable_non_chords(
         tokens=chord_tokens,
         image=processed_image,
@@ -110,12 +118,16 @@ def run_omr_pipeline(
         )
     )
     ocr_diagnostics = {
-        "backend": "easyocr",
+        "backend": "easyocr+paddleocr_rescue"
+        if paddleocr_rescue and paddleocr_rescue.get("enabled")
+        else "easyocr",
         "strategy": ocr_strategy,
         "accepted_tokens": [serialize_token(token) for token in chord_tokens],
         "rejected_hits": ocr_rejects,
         "filtered_hits": filtered_hits,
     }
+    if paddleocr_rescue is not None:
+        ocr_diagnostics["paddleocr_rescue"] = paddleocr_rescue
     overlay_path = write_chord_assignment_overlay(
         image=processed_image,
         pages=chord_result["pages"],
@@ -167,6 +179,13 @@ def run_sheet_music_chord_pipeline(
         geometry=geometry,
         return_strategy=True,
     )
+    chord_tokens, ocr_rejects, paddleocr_rescue = maybe_apply_paddleocr_rescue(
+        processed_image_path=homr_artifacts.processed_image_path,
+        geometry=geometry,
+        tokens=chord_tokens,
+        rejects=ocr_rejects,
+        output_dir=output_dir,
+    )
     chord_tokens, filtered_hits = filter_probable_non_chords(
         tokens=chord_tokens,
         image=processed_image,
@@ -179,12 +198,16 @@ def run_sheet_music_chord_pipeline(
         source_path=homr_artifacts.processed_image_path.name,
     )
     ocr_diagnostics = {
-        "backend": "easyocr",
+        "backend": "easyocr+paddleocr_rescue"
+        if paddleocr_rescue and paddleocr_rescue.get("enabled")
+        else "easyocr",
         "strategy": ocr_strategy,
         "accepted_tokens": [serialize_token(token) for token in chord_tokens],
         "rejected_hits": ocr_rejects,
         "filtered_hits": filtered_hits,
     }
+    if paddleocr_rescue is not None:
+        ocr_diagnostics["paddleocr_rescue"] = paddleocr_rescue
     overlay_path = write_chord_assignment_overlay(
         image=processed_image,
         pages=chord_result["pages"],

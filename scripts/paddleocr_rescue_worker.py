@@ -146,6 +146,15 @@ def run_rescue(request: dict[str, Any]) -> dict[str, Any]:
         "diagnostics": {
             "mode": mode,
             "regions": len(regions),
+            "rescue_regions": [
+                {
+                    "source": region.source,
+                    "system_index": region.system_index,
+                    "bbox": list(region.bbox),
+                    "triggers": list(region.triggers),
+                }
+                for region in regions
+            ],
             "seconds": round(elapsed, 3),
             "warmup_seconds": round(warmup_seconds, 3),
             "raw_hits": len(raw_hits),
@@ -158,6 +167,7 @@ def run_rescue(request: dict[str, Any]) -> dict[str, Any]:
             "replacement_candidates": hybrid["replacement_candidates"],
             "replacements_applied": replacement_decisions(candidate_groups),
             "candidate_groups": candidate_groups,
+            "paddle_rejects": paddle_rejects,
         },
     }
 

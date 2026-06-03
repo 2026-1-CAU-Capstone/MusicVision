@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from pipeline.chords.models import ChordToken
+from pipeline.chords.paddleocr_rescue_overlay import write_paddleocr_rescue_overlay
 from pipeline.chords.token_filters import serialize_token
 
 
@@ -156,6 +157,14 @@ def maybe_apply_paddleocr_rescue(
             "response_file": response_path.name,
         }
     )
+    overlay_path = write_paddleocr_rescue_overlay(
+        image_path=processed_image_path,
+        output_dir=output_dir,
+        baseline_tokens=tokens,
+        diagnostics=diagnostics,
+    )
+    if overlay_path is not None:
+        diagnostics["overlay_file"] = overlay_path.name
     combined_rejects = [*rejects, *(response.get("paddle_rejects") or [])]
     return rescued_tokens, combined_rejects, diagnostics
 

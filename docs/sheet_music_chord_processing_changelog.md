@@ -4,6 +4,139 @@ This file records the implementation changes made for the sheet-music chord
 processing branch in more detail than the architectural summary in
 `docs/sheet_music_chord_processing.md`.
 
+## 2026-06-03 - Chord OCR candidate resolution and uncertain diagnostics
+
+### Starting point
+
+The targeted chord-band OCR pass improved speed and reduced noise, but it still
+rejected real jazz chord symbols when EasyOCR misread the longer quality text.
+The most visible examples were major seventh chords on `Take_The_A_Train`:
+
+```text
+Cmaj7  -> Cm4it
+Fmaj7  -> Fm4T
+Cmaj7  -> Cm4t
+Fmaj7  -> Fmajt
+Bbmaj7 -> Bbmai7
+Fmaj7  -> Fm4i7
+Cmaj7  -> Cm4jt
+```
+
+There were also structural misses such as `C 7`, which EasyOCR detected as one
+text hit but the chord grammar rejected because of the internal space. Rejected
+hits already appeared in `chord_ocr.rejected_hits`, but they did not tell the
+caller when the rejected text was probably a chord-like miss.
+
+### Implemented bounded correction
+
+The first pass was intentionally not a broad hardcoded rulebase. The added
+corrections are structural and high confidence:
+
+```text
+C 7     -> C7
+Bb maj7 -> Bbmaj7
+C_7     -> C-7
+6m7     -> Gm7
+CM7     -> Cmaj7
+```
+
+This covers chord-component spacing, underscore/minor shorthand, the observed
+`G` root as `6` issue, and body casing. The first/root letter can remain
+uppercase, while chord-quality text is normalized to lowercase except for slash
+bass roots.
+
+### Added constrained OCR and candidate resolution
+
+`pipeline/chords/easyocr_backend.py` now calls EasyOCR with a chord-character
+allowlist. This constrains recognition to plausible chord-symbol characters
+without running any extra OCR passes.
+
+`pipeline/chords/candidate_resolution.py` adds a conservative candidate resolver
+for grammar-rejected OCR hits. It generates common valid chord candidates for
+the same likely root and scores them with weighted OCR-confusion costs. This is
+meant for families of errors such as `Cm4it` -> `Cmaj7`, not for one-off
+string replacements.
+
+The resolver accepts the best candidate only when it is above the score
+threshold and clearly ahead of the next-best candidate. Otherwise the hit stays
+rejected and is annotated as:
+
+```json
+{
+  "candidate_kind": "uncertain_chord",
+  "suggestions": [
+    {
+      "text_norm": "Am7b5",
+      "score": 0.663,
+      "reason": "near_valid_chord_candidate"
+    }
+  ]
+}
+```
+
+Rootless fragments such as `maj` and `sus` remain rejected instead of being
+assigned as standalone chords.
+
+### Results
+
+Benchmarks reused the same saved HOMR artifacts as the targeted-OCR benchmark.
+The EasyOCR reader was warmed before timing, and HOMR was not rerun.
+
+| Sample | Pipeline state | OCR+filter time | Kept tokens | Rejected hits | Uncertain rejected hits |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Take The A Train | Previous targeted OCR | `14.705s` | `21` | `14` | `0` |
+| Take The A Train | Candidate resolution | `16.144s` | `30` | `4` | `0` |
+| Autumn Leaves | Previous targeted OCR | `13.599s` | `29` | `12` | `0` |
+| Autumn Leaves | Candidate resolution | `16.330s` | `32` | `9` | `1` |
+
+The improvement is strongest on `Take_The_A_Train`, where the major seventh
+misreads became assigned chords and rejected OCR noise dropped. `Autumn Leaves`
+also kept more chords and surfaced one uncertain `Am7b5`-like reject for caller
+inspection.
+
+Saved benchmark job artifacts were written for later inspection:
+
+```text
+storage/jobs/bench-candidate-resolution-take-the-a-train-20260604
+storage/jobs/bench-candidate-resolution-autumn-leaves-20260604
+```
+
+Both jobs include current candidate-resolution chord assignments, diagnostic
+overlays, completed job status files, and `output/benchmark_metadata.json` with
+the previous targeted OCR versus candidate-resolution comparison numbers.
+
+The backward step is runtime: the final OCR+filter timings are about `1.4s`
+slower on `Take_The_A_Train` and about `2.7s` slower on `Autumn Leaves` than
+the previous targeted-only benchmark. They remain meaningfully faster than the
+legacy full-page OCR timings of `25.801s` and `24.747s`, but this should be
+watched on more samples.
+
+### Allowlist ablation
+
+The allowlist did not appear to be the main source of the runtime increase:
+
+| Mode | Take The A Train time | Take kept tokens | Autumn Leaves time | Autumn kept tokens |
+| --- | ---: | ---: | ---: | ---: |
+| With allowlist | `16.144s` | `30` | `16.330s` | `32` |
+| Without allowlist | `15.842s` | `29` | `16.465s` | `32` |
+
+The allowlist was kept because it had no clear runtime penalty in this ablation
+and recovered one additional Take The A Train token.
+
+### Test coverage
+
+Added `tests/test_chord_candidate_resolution.py` for:
+
+- spacing/minor-shorthand/root/casing structural corrections
+- observed major seventh OCR misreads
+- rejecting rootless `maj` and `sus` fragments
+- uncertain candidate diagnostics
+
+Extended `tests/test_chord_ocr_backend.py` for:
+
+- EasyOCR allowlist wiring
+- `uncertain_chord` reject payloads
+
 ## 2026-06-03 - Targeted chord-band OCR with full-page fallback
 
 ### Starting point

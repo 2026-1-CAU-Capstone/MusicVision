@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 
-from pipeline.chords.grammar import looks_like_chord_ocr, normalize_text
+from pipeline.chords.candidate_resolution import resolve_chord_ocr_text
 from pipeline.chords.models import ChordToken, merge_close_values
 from pipeline.chords.ocr_common import preprocess_for_ocr, try_split_merged_token
 
@@ -14,6 +14,10 @@ _reader: Any | None = None
 _MIN_TARGETED_SYSTEM_COVERAGE = 0.50
 _MIN_TARGETED_SYSTEMS_WITH_CHORDS = 0.25
 _MIN_TARGETED_TOKENS_PER_MEASURE = 0.20
+_CHORD_OCR_ALLOWLIST = (
+    "ABCDEFGabcdefgijlmnorstux0123456789#b()/+-_ "
+    "\u00b0\u00f8\ue260\ue262\ue10d\ue10c"
+)
 
 
 @dataclass(frozen=True)
@@ -243,12 +247,12 @@ def _run_ocr_pass(
             )
             continue
 
-        passed, corrected = looks_like_chord_ocr(raw_text)
-        if passed:
+        resolution = resolve_chord_ocr_text(raw_text)
+        if resolution.accepted:
             tokens.append(
                 ChordToken(
                     text_raw=raw_text,
-                    text_norm=normalize_text(corrected),
+                    text_norm=resolution.text_norm,
                     bbox=bbox,
                     confidence=confidence_value,
                 )
@@ -267,7 +271,7 @@ def _run_ocr_pass(
         rejects.append(
             {
                 "text": raw_text,
-                "text_norm": corrected,
+                "text_norm": resolution.text_norm,
                 "bbox": list(bbox),
                 "conf": confidence_value,
                 "source": source,
@@ -277,6 +281,7 @@ def _run_ocr_pass(
                     else {}
                 ),
                 "reason": "failed chord grammar",
+                **resolution.reject_context(),
             }
         )
 
@@ -284,7 +289,12 @@ def _run_ocr_pass(
 
 
 def _readtext(reader: Any, image: np.ndarray) -> list[Any]:
-    return reader.readtext(image, detail=1, paragraph=False)
+    return reader.readtext(
+        image,
+        detail=1,
+        paragraph=False,
+        allowlist=_CHORD_OCR_ALLOWLIST,
+    )
 
 
 def _usable_systems(

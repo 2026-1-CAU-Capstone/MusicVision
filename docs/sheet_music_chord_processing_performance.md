@@ -116,6 +116,72 @@ The padding change was reverted. The tighter chord-band crop kept the better
 runtime/noise balance, and the full-page fallback remains the safer recall path
 when targeted OCR is globally sparse.
 
+## 2026-06-03 chord OCR candidate-resolution benchmark
+
+Inputs:
+
+```text
+storage/jobs/bench-targeted-ocr-take-the-a-train-20260603/output
+storage/jobs/bench-targeted-ocr-autumn-leaves-20260603/output
+```
+
+Environment:
+
+- local Windows development machine
+- project virtualenv
+- CPU execution
+- no GPU accelerator detected
+- EasyOCR reader warmed before timing
+- benchmark reused saved `homr_processed.png` and `geometry.json`
+- benchmark isolated OCR extraction and visual filtering; HOMR was not rerun
+
+This benchmark measures the OCR accuracy follow-up after targeted chord-band
+OCR. The implementation added:
+
+- an EasyOCR chord-character allowlist
+- structural corrections for chord spacing, `_` minor shorthand, `6` as a
+  likely `G` root, and body casing
+- conservative candidate resolution for major-seventh-style OCR errors such as
+  `Cm4it` -> `Cmaj7`
+- `uncertain_chord` diagnostics for rejected text that is probably chord-like
+
+Saved benchmark jobs:
+
+```text
+storage/jobs/bench-candidate-resolution-take-the-a-train-20260604
+storage/jobs/bench-candidate-resolution-autumn-leaves-20260604
+```
+
+Each saved job includes the current candidate-resolution `chord_assignments.json`,
+`chord_assignment_overlay.png`, `job_status.json`, and
+`output/benchmark_metadata.json`.
+
+| Sample | Pipeline state | OCR+filter time | Accepted before filters | Kept after filters | Rejected hits | Filtered hits | Uncertain rejected hits |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Take The A Train | Previous targeted OCR | `14.705s` | `21` | `21` | `14` | `0` | `0` |
+| Take The A Train | Candidate resolution | `16.144s` | `30` | `30` | `4` | `0` | `0` |
+| Autumn Leaves | Previous targeted OCR | `13.599s` | `31` | `29` | `12` | `2` | `0` |
+| Autumn Leaves | Candidate resolution | `16.330s` | `34` | `32` | `9` | `2` | `1` |
+
+The candidate-resolution pass improved kept chord counts and reduced rejected
+OCR hits on both samples. The cost is runtime: Take The A Train became about
+`1.4s` slower than the previous targeted benchmark, and Autumn Leaves became
+about `2.7s` slower. Both remain faster than the legacy full-page OCR timings
+above, but the added runtime should be rechecked on the final benchmark set.
+
+### Allowlist ablation
+
+The allowlist was tested separately because the final benchmark was slower than
+the previous targeted-only numbers.
+
+| Mode | Take The A Train time | Take kept tokens | Autumn Leaves time | Autumn kept tokens |
+| --- | ---: | ---: | ---: | ---: |
+| With allowlist | `16.144s` | `30` | `16.330s` | `32` |
+| Without allowlist | `15.842s` | `29` | `16.465s` | `32` |
+
+The allowlist was kept. It recovered one additional Take The A Train token and
+did not show a clear runtime penalty in this ablation.
+
 ## Timing results
 
 Cold-ish runs used separate Python processes, so each run included its own model
@@ -145,6 +211,7 @@ HOMR-only measurements on the same input:
 Generated benchmark artifacts:
 
 ```text
+storage/jobs/bench-candidate-resolution-*
 storage/jobs/bench-targeted-ocr-*
 storage/jobs/bench-chord-only-autumn-leaves*
 storage/jobs/bench-full-omr-autumn-leaves*
@@ -164,10 +231,14 @@ geometry-only takes about 7 seconds, while the full chord-only pipeline takes
 about 40 seconds. That leaves most of the runtime in printed chord OCR and its
 image preprocessing, not in HOMR visual measure extraction.
 
-Both the chord-only and full OMR-plus-chords runs assigned:
+Those older full-pipeline timing runs assigned:
 
 - `34` visual measures
 - `30` chord tokens
+
+The later candidate-resolution OCR-isolated benchmark kept `32` Autumn Leaves
+tokens on the same saved geometry, so treat the older `30` token count as
+historical context rather than the current best OCR result.
 
 ## Current bottleneck
 
@@ -176,6 +247,8 @@ The main optimization target is still the EasyOCR stage:
 - EasyOCR reader startup costs several seconds in a cold process.
 - The targeted chord-band pass reduces notation/header noise, but EasyOCR still
   dominates the warm pipeline on CPU.
+- Candidate resolution improves recall and diagnostics, but it does not reduce
+  EasyOCR runtime and made the latest OCR+filter benchmark modestly slower.
 - Unusual chord placement can still require the full-page fallback.
 - OCR scale and preprocessing settings may still be more expensive than
   necessary for some inputs.

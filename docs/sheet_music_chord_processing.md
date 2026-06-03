@@ -147,6 +147,56 @@ targeted_only
 targeted_with_full_page_fallback
 ```
 
+### Chord OCR correction and uncertain candidates
+
+After EasyOCR returns text, the chord OCR path applies a bounded correction pass
+before measure assignment. The goal is to fix high-confidence OCR structure
+errors without turning the parser into a large per-song rulebase.
+
+The EasyOCR call is constrained with a chord-character allowlist. This keeps the
+recognizer focused on roots, lowercase chord-quality text, digits, accidentals,
+slash chords, parentheses, and minor shorthand. It does not add another OCR pass.
+
+The structural normalizer handles cases that are common and low risk:
+
+```text
+C 7     -> C7
+Bb maj7 -> Bbmaj7
+C_7     -> C-7
+6m7     -> Gm7
+CM7     -> Cmaj7
+```
+
+For harder OCR strings such as `Cm4it`, `Fm4T`, or `Bbmai7`, the pipeline does
+not use one-off string replacements. Instead,
+`pipeline/chords/candidate_resolution.py` compares the rejected text with a
+small set of valid common chord candidates for the same likely root. It uses
+weighted OCR-confusion costs for character-level mistakes such as `4` versus
+`a`, `i` versus `j`, and `t`/`z` versus `7`.
+
+A candidate is accepted only when it clears the score threshold and is clearly
+better than the next-best candidate. Otherwise the hit remains rejected but is
+reported as an uncertain chord candidate:
+
+```json
+{
+  "text": "Am76s)",
+  "text_norm": "Am76s)",
+  "reason": "failed chord grammar",
+  "candidate_kind": "uncertain_chord",
+  "suggestions": [
+    {
+      "text_norm": "Am7b5",
+      "score": 0.663,
+      "reason": "near_valid_chord_candidate"
+    }
+  ]
+}
+```
+
+This gives callers a way to show or inspect likely chord OCR misses without
+silently assigning ambiguous text to a measure.
+
 ### Geometry repair heuristics
 
 HOMR geometry remains the preferred source of truth, but the assignment stage
@@ -385,8 +435,8 @@ Example shape:
         "systems_total": 8,
         "usable_system_crop_count": 8,
         "estimated_visual_measures": 31,
-        "accepted_tokens_before_visual_filters": 21,
-        "rejected_hits": 14,
+        "accepted_tokens_before_visual_filters": 30,
+        "rejected_hits": 4,
         "systems_with_chords": 7
       },
       "fallback": {

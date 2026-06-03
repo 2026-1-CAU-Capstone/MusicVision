@@ -203,3 +203,78 @@ def test_complete_targeted_ocr_skips_full_page_fallback(monkeypatch) -> None:
     assert strategy["mode"] == "targeted_only"
     assert strategy["fallback"]["triggered"] is False
     assert len(tokens) == 4
+
+
+def test_readtext_uses_chord_character_allowlist() -> None:
+    class FakeReader:
+        def __init__(self) -> None:
+            self.kwargs = {}
+
+        def readtext(self, _image, **kwargs):
+            self.kwargs = kwargs
+            return []
+
+    reader = FakeReader()
+    ocr_backend._readtext(reader, np.full((20, 20, 3), 255, dtype=np.uint8))
+
+    assert reader.kwargs["detail"] == 1
+    assert reader.kwargs["paragraph"] is False
+    assert "_" in reader.kwargs["allowlist"]
+    assert "-" in reader.kwargs["allowlist"]
+    assert "T" not in reader.kwargs["allowlist"]
+
+
+def test_rejected_near_chord_reports_uncertain_candidate_context(monkeypatch) -> None:
+    monkeypatch.setattr(ocr_backend, "preprocess_for_ocr", lambda image, scale: image)
+    monkeypatch.setattr(ocr_backend, "_get_reader", lambda gpu=False: object())
+    monkeypatch.setattr(
+        ocr_backend,
+        "_readtext",
+        lambda _reader, _image: [
+            (
+                [(10.0, 10.0), (40.0, 10.0), (40.0, 25.0), (10.0, 25.0)],
+                "Cx7",
+                0.88,
+            )
+        ],
+    )
+
+    result = ocr_backend._run_ocr_pass(
+        np.full((40, 60, 3), 255, dtype=np.uint8),
+        min_confidence=0.15,
+        gpu=False,
+        ocr_scale=1.0,
+        source="targeted_chord_band",
+        system_index=1,
+    )
+
+    assert result.tokens == []
+    assert result.rejects == [
+        {
+            "text": "Cx7",
+            "text_norm": "Cx7",
+            "bbox": [10.0, 10.0, 40.0, 25.0],
+            "conf": 0.88,
+            "source": "targeted_chord_band",
+            "system_index": 1,
+            "reason": "failed chord grammar",
+            "candidate_kind": "uncertain_chord",
+            "suggestions": [
+                {
+                    "text_norm": "C7",
+                    "score": 0.733,
+                    "reason": "near_valid_chord_candidate",
+                },
+                {
+                    "text_norm": "C+7",
+                    "score": 0.667,
+                    "reason": "near_valid_chord_candidate",
+                },
+                {
+                    "text_norm": "C-7",
+                    "score": 0.667,
+                    "reason": "near_valid_chord_candidate",
+                },
+            ],
+        }
+    ]

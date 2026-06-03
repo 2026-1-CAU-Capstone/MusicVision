@@ -50,6 +50,72 @@ endings for numbers `1` and `2`. The runtime difference should be treated as
 normal local run-to-run variance; the added postprocess is small compared with
 HOMR and EasyOCR.
 
+## 2026-06-03 targeted chord-band OCR benchmark
+
+Inputs:
+
+```text
+storage/jobs/take_the_a_train-clef_endings-20260603/output
+storage/jobs/bench-chord-only-autumn-leaves-warm/output
+```
+
+Environment:
+
+- local Windows development machine
+- project virtualenv
+- CPU execution
+- no GPU accelerator detected
+- EasyOCR reader warmed before the timed OCR comparisons
+- benchmark reused saved `homr_processed.png` and `geometry.json`
+
+This comparison isolates the OCR extraction and visual filtering stage. It does
+not rerun HOMR.
+
+Saved benchmark jobs:
+
+```text
+storage/jobs/bench-targeted-ocr-take-the-a-train-20260603
+storage/jobs/bench-targeted-ocr-autumn-leaves-20260603
+```
+
+Each saved job includes a fresh `chord_assignments.json`,
+`chord_assignment_overlay.png`, `job_status.json`, and
+`output/benchmark_metadata.json` generated from the current targeted OCR path.
+
+### Take The A Train
+
+| OCR mode | Strategy | OCR+filter time | Accepted before filters | Kept after filters | Rejected hits |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Full-page legacy | `full_page` | `25.801s` | `22` | `21` | `45` |
+| Targeted policy | `targeted_only` | `14.705s` | `21` | `21` | `14` |
+
+### Autumn Leaves
+
+| OCR mode | Strategy | OCR+filter time | Accepted before filters | Kept after filters | Rejected hits |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Full-page legacy | `full_page` | `24.747s` | `34` | `30` | `90` |
+| Targeted policy | `targeted_only` | `13.599s` | `31` | `29` | `12` |
+
+The targeted pass roughly halved warm OCR time on these two saved artifacts and
+substantially reduced rejected OCR noise. The Autumn Leaves run also exposed a
+recall tradeoff: targeted OCR produced one fewer kept token than full-page OCR,
+while removing obvious non-chord noise such as the full-page `B4` false positive.
+
+### Crop-padding experiment
+
+After the first targeted benchmark, a wider global vertical crop context was
+tested to see whether it would recover a locally missed Autumn Leaves token. It
+helped on one isolated crop, but worsened full-sample behavior:
+
+| Padding | Sample | OCR+filter time | Kept after filters | Rejected hits |
+| ---: | --- | ---: | ---: | ---: |
+| `20 px` | Autumn Leaves | `16.359s` | `28` | `12` |
+| `40 px` | Autumn Leaves | `20.665s` | `28` | `49` |
+
+The padding change was reverted. The tighter chord-band crop kept the better
+runtime/noise balance, and the full-page fallback remains the safer recall path
+when targeted OCR is globally sparse.
+
 ## Timing results
 
 Cold-ish runs used separate Python processes, so each run included its own model
@@ -79,6 +145,7 @@ HOMR-only measurements on the same input:
 Generated benchmark artifacts:
 
 ```text
+storage/jobs/bench-targeted-ocr-*
 storage/jobs/bench-chord-only-autumn-leaves*
 storage/jobs/bench-full-omr-autumn-leaves*
 storage/jobs/bench-homr-geometry-only-autumn-leaves
@@ -104,21 +171,26 @@ Both the chord-only and full OMR-plus-chords runs assigned:
 
 ## Current bottleneck
 
-The main optimization target is now the EasyOCR stage:
+The main optimization target is still the EasyOCR stage:
 
 - EasyOCR reader startup costs several seconds in a cold process.
-- OCR is currently run over the processed score image rather than restricted to
-  chord-likely regions.
-- Text detection/recognition spends time on notation and other non-chord areas.
-- OCR scale and preprocessing settings may be more expensive than necessary for
-  some inputs.
+- The targeted chord-band pass reduces notation/header noise, but EasyOCR still
+  dominates the warm pipeline on CPU.
+- Unusual chord placement can still require the full-page fallback.
+- OCR scale and preprocessing settings may still be more expensive than
+  necessary for some inputs.
 
 ## Future optimization ideas
 
 - Reuse the EasyOCR reader in the long-running API process.
-- Crop OCR to regions above staff systems before recognition.
-- Run OCR per system or per likely chord band rather than over the full page.
-- Compare alternate OCR backends for short printed chord labels.
+- Refine the targeted/full-page fallback thresholds with more reviewed samples.
+- Benchmark PaddleOCR recognition-only on the same targeted chord crops if a
+  future dependency spike is approved.
+- Evaluate JAZZMUS after the final MusicVision benchmark as an external
+  handwritten jazz lead-sheet reference.
+- Keep synthetic jazz-font fine-tuning as future research; it is likely useful
+  for semi-handwritten Real Book-style symbols, but was out of scope for this
+  pass.
 - Tune OCR scale adaptively based on staff size or image resolution.
 - Cache `homr_processed.png` and `geometry.json` during local benchmark work.
 

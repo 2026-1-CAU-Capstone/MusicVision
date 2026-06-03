@@ -4,6 +4,104 @@ This file records the implementation changes made for the sheet-music chord
 processing branch in more detail than the architectural summary in
 `docs/sheet_music_chord_processing.md`.
 
+## 2026-06-03 - Targeted chord-band OCR with full-page fallback
+
+### Starting point
+
+The sheet-music OCR backend used EasyOCR over the full `homr_processed.png`.
+That kept recall broad, but the performance notes showed OCR was the dominant
+runtime cost and the full-page pass spent time on notation, lyrics/header text,
+and other non-chord regions.
+
+### Implemented targeted OCR
+
+`pipeline/chords/easyocr_backend.py` now builds chord-band crops from HOMR
+system geometry and runs EasyOCR over those likely chord regions first. The crop
+coordinates remain in `homr_processed_image` space, so accepted token boxes still
+flow into the existing assignment logic unchanged.
+
+The extraction strategy is recorded in `chord_ocr.strategy` with one of:
+
+```text
+full_page
+targeted_only
+targeted_with_full_page_fallback
+```
+
+### Added fallback policy
+
+The old full-page OCR pass remains the recall fallback. It runs when targeted OCR
+looks implausibly sparse:
+
+```text
+accepted_tokens == 0
+usable_system_crop_count / systems_total < 0.50
+systems_with_chords / systems_total < 0.25
+accepted_tokens / estimated_visual_measure_count < 0.20
+```
+
+When fallback runs, targeted and full-page tokens are merged by normalized text
+and overlapping or nearby bounding boxes. The higher-confidence duplicate is
+kept.
+
+### Results
+
+Using saved HOMR artifacts, the benchmark compared the legacy full-page OCR path
+with the new targeted policy on the same processed images and geometry.
+
+On `Take_The_A_Train`, targeted OCR stayed in `targeted_only` mode:
+
+| Mode | OCR+filter time | Kept tokens | Rejected hits |
+| --- | ---: | ---: | ---: |
+| Full-page legacy | `25.801s` | `21` | `45` |
+| Targeted policy | `14.705s` | `21` | `14` |
+
+On `Autumn Leaves`, targeted OCR also stayed in `targeted_only` mode:
+
+| Mode | OCR+filter time | Kept tokens | Rejected hits |
+| --- | ---: | ---: | ---: |
+| Full-page legacy | `24.747s` | `30` | `90` |
+| Targeted policy | `13.599s` | `29` | `12` |
+
+The Autumn Leaves comparison showed the tradeoff clearly. Targeted OCR removed a
+large amount of rejected noise and one obvious full-page false positive (`B4`),
+but it produced one fewer kept token than the broad full-page pass. The result is
+still useful because the full-page fallback remains available for layouts that
+look globally sparse; it is not triggered merely because one sample has a small
+local difference.
+
+Saved benchmark job artifacts were also written for later inspection:
+
+```text
+storage/jobs/bench-targeted-ocr-take-the-a-train-20260603
+storage/jobs/bench-targeted-ocr-autumn-leaves-20260603
+```
+
+Both jobs include current targeted-OCR chord assignments, diagnostic overlays,
+completed job status files, and `output/benchmark_metadata.json` with the
+full-page versus targeted comparison numbers.
+
+### Follow-up tuning attempted
+
+A wider global crop context was tested after noticing one missed Autumn Leaves
+token inside an otherwise valid chord band. Padding recovered that local token in
+an isolated crop, but on full samples it made OCR slower and noisier:
+
+- `20 px` vertical padding: Autumn Leaves kept `28` tokens and took `16.359s`
+- `40 px` vertical padding: Autumn Leaves kept `28` tokens and took `20.665s`
+
+The wider padding was reverted. The tighter chord-band crop kept the better
+speed/noise balance.
+
+### Test coverage
+
+Added `tests/test_chord_ocr_backend.py` for:
+
+- chord-band crop construction
+- targeted fallback threshold behavior
+- targeted/full-page merge behavior
+- skipping full-page fallback when targeted OCR is complete enough
+
 ## 2026-06-03 - Full OMR clef cleanup and ending marker postprocess
 
 ### Added single-staff clef cleanup

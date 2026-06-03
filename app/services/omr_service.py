@@ -21,6 +21,12 @@ from pipeline.musicxml_alignment import (
 from pipeline.postprocess import postprocess_omr_output
 from pipeline.preprocess import preprocess_input
 from pipeline.run_homr import run_homr, run_homr_geometry_only
+from pipeline.sheet_music_structure import (
+    annotate_ending_markers,
+    apply_ending_markers_to_musicxml,
+    clean_single_staff_redundant_clefs,
+    detect_ending_markers,
+)
 
 
 @dataclass(frozen=True)
@@ -56,6 +62,9 @@ def run_omr_pipeline(
         output_dir=output_dir,
         logs_dir=logs_dir,
     )
+    musicxml_postprocess = clean_single_staff_redundant_clefs(
+        homr_artifacts.musicxml_path,
+    )
     processed_image = load_rgb_image(homr_artifacts.processed_image_path)
     geometry = load_geometry_json(homr_artifacts.geometry_json_path)
     expected_measure_counts_by_system = read_musicxml_system_measure_counts(
@@ -74,9 +83,27 @@ def run_omr_pipeline(
         source_path=homr_artifacts.processed_image_path.name,
         expected_measure_counts_by_system=expected_measure_counts_by_system,
     )
+    ending_markers = detect_ending_markers(
+        image=processed_image,
+        pages=chord_result["pages"],
+    )
+    annotate_ending_markers(
+        pages=chord_result["pages"],
+        markers=ending_markers,
+    )
     measure_alignment = annotate_measure_alignment(
         chord_result=chord_result,
         musicxml_path=homr_artifacts.musicxml_path,
+    )
+    musicxml_postprocess["detected_endings"] = [
+        marker.to_dict() for marker in ending_markers
+    ]
+    musicxml_postprocess.update(
+        apply_ending_markers_to_musicxml(
+            musicxml_path=homr_artifacts.musicxml_path,
+            pages=chord_result["pages"],
+            markers=ending_markers,
+        )
     )
     ocr_diagnostics = {
         "backend": "easyocr",
@@ -99,6 +126,7 @@ def run_omr_pipeline(
         overlay_path=overlay_path,
         measure_alignment=measure_alignment,
     )
+    result_payload["musicxml_postprocess"] = musicxml_postprocess
     chord_assignments_path = export_chord_assignments_json(
         result_payload=result_payload,
         output_dir=output_dir,

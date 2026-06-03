@@ -4,6 +4,47 @@ This file records the implementation changes made for the sheet-music chord
 processing branch in more detail than the architectural summary in
 `docs/sheet_music_chord_processing.md`.
 
+## 2026-06-03 - Full OMR clef cleanup and ending marker postprocess
+
+### Added single-staff clef cleanup
+
+Added `pipeline/sheet_music_structure.py` and wired it into the full
+`/omr/process` pipeline after HOMR writes `score.musicxml`.
+
+The cleanup removes later `<clef>` entries only when the MusicXML appears to be
+a single-staff score. It skips multi-staff material by checking MusicXML
+`<staves>` values and numbered clefs, so piano-style or multi-staff output does
+not lose legitimate staff clefs.
+
+On `resources/Take_The_A_Train.png`, this reduced the generated MusicXML from
+seven clefs to one treble clef.
+
+### Added first/second ending detection
+
+Added a lightweight visual pass for ending brackets above staff systems. The
+detector:
+
+- searches the band above each visual system
+- extracts long horizontal marks with a left bracket hook
+- filters candidates that sit too close to the staff, which avoids common false
+  positives from beamed note groups
+- maps accepted brackets back to visual measure boxes
+- annotates those measures with `form_markers`
+- writes MusicXML `<ending>` start/stop barlines after measure alignment supplies
+  MusicXML measure numbers
+
+On `resources/Take_The_A_Train.png`, it detects the first and second ending
+brackets on visual measures 10 and 11 and writes MusicXML endings `1` and `2`.
+
+### Test coverage
+
+Added `tests/test_sheet_music_structure.py` for:
+
+- single-staff redundant clef removal
+- multi-staff clef preservation
+- MusicXML ending start/stop insertion
+- synthetic visual ending bracket detection
+
 ## 2026-05-18 - Initial image-based integration
 
 ### Added HOMR sidecar artifact export

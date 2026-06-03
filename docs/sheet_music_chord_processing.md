@@ -106,11 +106,12 @@ The image-only first pass lives under `pipeline/chords/`:
 
 Assignment behavior:
 
-1. assign each OCR token to the nearest HOMR system by y-position
-2. build measure intervals from the barlines for that system
-3. place each token into a measure by x-position
-4. estimate beat position within the measure where practical
-5. use the CV fallback only if HOMR geometry is missing, incomplete, or unusable
+1. assign targeted OCR tokens to their source HOMR system when available
+2. otherwise assign each OCR token to the nearest HOMR system by y-position
+3. build measure intervals from the barlines for that system
+4. place each token into a measure by x-position
+5. estimate beat position within the measure where practical
+6. use the CV fallback only if HOMR geometry is missing, incomplete, or unusable
 
 ### Targeted chord-band OCR
 
@@ -214,6 +215,24 @@ F87  -> F#7
 Low-confidence hits now run through the resolver before being rejected. They are
 not assigned as chords, but chord-like low-confidence hits can include
 `candidate_kind: "uncertain_chord"` and candidate suggestions.
+
+For handwritten-style `maj7` symbols, the resolver also emits a specific
+`handwritten_major_seventh_candidate` suggestion when the text looks like a
+damaged major-seventh suffix, such as `Ctin`, `Coi1`, `Can`, or `Cn+i`. These
+suggestions are diagnostic-first: they do not auto-assign a chord unless the
+normal near-valid candidate path also supports the same correction.
+
+The OCR backend also has one bounded split-token repair for touching symbols in
+the same targeted system crop. If EasyOCR reads a root-only token followed
+immediately by a `maj7`-like tail fragment, the pair is merged into one chord
+token:
+
+```text
+Bb + an7/Ab7 -> Bbmaj7
+```
+
+The merge requires same-system provenance when available, strong vertical
+overlap, and a very small horizontal gap. Separated chords are left alone.
 
 Targeted OCR tokens also keep their source `system_index`. During HOMR-geometry
 assignment, that index is preferred over nearest-y grouping so chords that sit

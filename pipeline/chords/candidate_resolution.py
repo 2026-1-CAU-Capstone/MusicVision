@@ -117,7 +117,7 @@ def resolve_chord_ocr_text(text: str) -> ChordOCRResolution:
                 raw_text=text,
                 accepted_text=text_norm,
             )
-            if _has_clear_auto_correction(suggestions):
+            if _can_auto_correct(suggestions):
                 best = suggestions[0]
                 if str(best["text_norm"]) != text_norm:
                     return ChordOCRResolution(
@@ -137,7 +137,7 @@ def resolve_chord_ocr_text(text: str) -> ChordOCRResolution:
         )
 
     suggestions = suggest_chord_ocr_candidates(text)
-    if _has_clear_auto_correction(suggestions):
+    if _can_auto_correct(suggestions):
         best = suggestions[0]
         return ChordOCRResolution(
             accepted=True,
@@ -224,16 +224,27 @@ def suggest_chord_ocr_candidates(
     if not roots:
         return []
 
-    scored: list[tuple[float, str]] = []
+    scored: list[tuple[float, str, str]] = []
+    normal_scores: dict[str, float] = {}
     for candidate in _candidate_symbols_for_roots(tuple(roots)):
         score = _similarity_score(compare_text, _comparison_text(candidate))
         if score >= SUGGESTION_MIN_SCORE:
-            scored.append((score, candidate))
+            scored.append((score, candidate, "near_valid_chord_candidate"))
+            normal_scores[normalize_text(candidate)] = max(
+                score,
+                normal_scores.get(normalize_text(candidate), 0.0),
+            )
+
+    for score, candidate, reason in _handwritten_major_seventh_candidate_scores(text):
+        candidate_norm = normalize_text(candidate)
+        if normal_scores.get(candidate_norm, 0.0) >= AUTO_CORRECT_MIN_SCORE:
+            reason = "near_valid_chord_candidate"
+        scored.append((score, candidate, reason))
 
     scored.sort(key=lambda item: (-item[0], len(item[1]), item[1]))
     result = []
     seen = set()
-    for score, candidate in scored:
+    for score, candidate, reason in scored:
         candidate_norm = normalize_text(candidate)
         if candidate_norm in seen:
             continue
@@ -242,13 +253,19 @@ def suggest_chord_ocr_candidates(
             {
                 "text_norm": candidate_norm,
                 "score": round(score, 3),
-                "reason": "near_valid_chord_candidate",
+                "reason": reason,
             }
         )
         if len(result) >= max_suggestions:
             break
 
     return result
+
+
+def _can_auto_correct(suggestions: list[dict[str, Any]]) -> bool:
+    if not _has_clear_auto_correction(suggestions):
+        return False
+    return str(suggestions[0].get("reason", "")) != "handwritten_major_seventh_candidate"
 
 
 def _has_clear_auto_correction(suggestions: list[dict[str, Any]]) -> bool:
@@ -264,6 +281,66 @@ def _has_clear_auto_correction(suggestions: list[dict[str, Any]]) -> bool:
 
     second_score = float(suggestions[1]["score"])
     return best_score - second_score >= AUTO_CORRECT_MIN_MARGIN
+
+
+def _handwritten_major_seventh_candidate_scores(
+    text: str,
+) -> list[tuple[float, str, str]]:
+    compact = _comparison_preserving_symbols(text)
+    if len(compact) < 3:
+        return []
+
+    candidates: list[tuple[float, str, str]] = []
+    for root, suffix, score in _handwritten_major_seventh_root_suffixes(compact):
+        if _looks_like_handwritten_major_seventh_suffix(suffix):
+            candidates.append(
+                (
+                    score,
+                    f"{root}maj7",
+                    "handwritten_major_seventh_candidate",
+                )
+            )
+    return candidates
+
+
+def _handwritten_major_seventh_root_suffixes(text: str) -> list[tuple[str, str, float]]:
+    first = text[0].upper()
+    if first not in _ROOTS:
+        return []
+
+    if len(text) > 1 and text[1] in ("b", "#"):
+        return [(f"{first}{text[1]}", text[2:], 0.97)]
+
+    candidates = [(first, text[1:], 0.97)]
+    if len(text) > 2 and text[1].lower() in {"l", "h", "q", "6", "5"}:
+        candidates.insert(0, (f"{first}b", text[2:], 0.975))
+    return candidates
+
+
+def _looks_like_handwritten_major_seventh_suffix(suffix: str) -> bool:
+    compact = "".join(
+        char.lower() for char in suffix if char.isalnum() or char in {"#", "+", "-"}
+    )
+    if len(compact) < 2 or len(compact) > 6:
+        return False
+    if compact in {"m7", "-7", "7", "9", "11", "13", "mi7", "mi1"}:
+        return False
+
+    has_seventh_like = any(char in compact for char in {"7", "1", "t", "n"})
+    if not has_seventh_like:
+        return False
+
+    if compact.startswith(("maj", "ma", "m4", "mr")):
+        return True
+    if compact.startswith(("ti", "oi", "an", "n+")):
+        return True
+
+    maj_like_count = sum(
+        1
+        for char in compact
+        if char in {"m", "a", "4", "r", "i", "j", "+", "o"}
+    )
+    return maj_like_count >= 2
 
 
 def _is_suspicious_accepted_chord(text: str) -> bool:

@@ -53,6 +53,25 @@ def test_candidate_resolution_repairs_suspicious_accepted_chords() -> None:
         assert resolution.text_norm == expected
 
 
+def test_candidate_resolution_marks_handwritten_major_seventh_as_uncertain() -> None:
+    resolution = resolve_chord_ocr_text("Ctin")
+
+    assert resolution.accepted is False
+    assert resolution.suggestions[0] == {
+        "text_norm": "Cmaj7",
+        "score": 0.97,
+        "reason": "handwritten_major_seventh_candidate",
+    }
+
+
+def test_candidate_resolution_preserves_clear_minor_seventh_correction() -> None:
+    resolution = resolve_chord_ocr_text("Cmi7")
+
+    assert resolution.accepted is True
+    assert resolution.auto_corrected is True
+    assert resolution.text_norm == "Cm7"
+
+
 def test_candidate_resolution_keeps_ambiguous_suspicious_chords() -> None:
     for raw_text in ("C79", "G9)"):
         resolution = resolve_chord_ocr_text(raw_text)

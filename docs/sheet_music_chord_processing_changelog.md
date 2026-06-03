@@ -4,6 +4,115 @@ This file records the implementation changes made for the sheet-music chord
 processing branch in more detail than the architectural summary in
 `docs/sheet_music_chord_processing.md`.
 
+## 2026-06-04 - Handwritten maj7 diagnostics and split-token merge
+
+### Starting point
+
+After the suspicious accepted-token repair pass, Afternoon in Paris still had
+two OCR failure modes that were not worth handing to an LLM yet:
+
+- low-confidence handwritten-style `maj7` blobs such as `Ctin`, `Coi1`, `Can`,
+  `Alm4i1`, and `Cn+i`
+- a split `Bbmaj7` where EasyOCR returned touching tokens, `Bb` plus
+  `an7`/`Ab7`
+
+The accepted-token repair pass also still retained some wrong-but-valid-looking
+tokens, including `Abm11`, `Cm7`, `C79`, and `G9)`. Those are noted below as
+remaining failures.
+
+### Implemented diagnostic-first handwritten maj7 candidates
+
+`pipeline/chords/candidate_resolution.py` now has a
+`handwritten_major_seventh_candidate` suggestion path. It looks for compact
+root-plus-suffix strings where the suffix resembles a damaged handwritten
+`maj7` shape. Examples include:
+
+```text
+Ctin   -> possible Cmaj7
+Coi1   -> possible Cmaj7
+Can    -> possible Cmaj7
+Cn+i   -> possible Cmaj7
+Alm4i1 -> possible Abmaj7 or Amaj7
+```
+
+This path is intentionally diagnostic-first. A handwritten-major-seventh
+candidate can be emitted as an `uncertain_chord` suggestion, but it does not
+auto-assign a chord unless the existing near-valid candidate scoring also
+supports the same correction. This avoids turning every ambiguous handwritten
+blob into a silent chord assignment.
+
+### Implemented same-system split-token merge
+
+`pipeline/chords/easyocr_backend.py` now repairs one narrow split case after OCR
+token extraction. If a root-only token is immediately followed by a `maj7`-like
+tail fragment in the same targeted system crop, the backend merges the pair:
+
+```text
+Bb + an7/Ab7 -> Bbmaj7
+```
+
+The merge requires:
+
+- a root-only left token, such as `Bb`
+- a right token that looks like a damaged `maj7` tail
+- same `system_index` when both tokens have targeted OCR provenance
+- strong vertical overlap
+- a near-touching horizontal gap
+
+Separated chords are left unmerged.
+
+### Results
+
+Saved benchmark jobs:
+
+```text
+storage/jobs/bench-handwritten-ocr-split-merge-afternoon-in-paris-20260604
+storage/jobs/bench-handwritten-ocr-split-merge-take-the-a-train-20260604
+storage/jobs/bench-handwritten-ocr-split-merge-autumn-leaves-20260604
+```
+
+Each job includes `chord_assignments.json`, `chord_assignment_overlay.png`,
+`job_status.json`, copied HOMR artifacts, and
+`output/benchmark_metadata.json`.
+
+| Sample | Previous repair pass | Current split/diagnostic pass |
+| --- | ---: | ---: |
+| Afternoon in Paris | `14.727s`, `33` kept, `7` rejects, `4` uncertain | `14.730s`, `32` kept, `7` rejects, `5` uncertain |
+| Take The A Train | `15.848s`, `30` kept, `4` rejects, `0` uncertain | `14.637s`, `30` kept, `4` rejects, `2` uncertain |
+| Autumn Leaves | `15.869s`, `32` kept, `9` rejects, `1` uncertain | `15.400s`, `32` kept, `9` rejects, `1` uncertain |
+
+The Afternoon kept-token count dropped by one because the previous `Bb` plus
+`Ab7` false split became one `Bbmaj7` token. That is an accuracy improvement
+rather than a recall loss.
+
+The first saved Afternoon timing was `17.190s`, but three immediate warmed
+reruns measured `14.986s`, `14.835s`, and `14.730s`. The benchmark table uses
+the repeated warmed runtime because it better matches the established warmed
+OCR benchmark method.
+
+### Remaining failures
+
+This was a partial success, not a complete handwritten-font solution:
+
+- low-confidence `Ctin`, `Coi1`, `Can`, `Alm4i1`, and `Cn+i` are now surfaced
+  as uncertain candidates but are still not assigned
+- `Abmaj7` can still be retained as `Abm11`
+- `Cmaj7` can still be retained as `Cm7`
+- `G7b9` can still be retained as `C79`
+- parenthesized `(G7)` can still be retained as `G9)`
+
+Those accepted-but-wrong cases probably need either stronger visual/contextual
+evidence or a different recognizer strategy; the current pass deliberately does
+not force them.
+
+### Test coverage
+
+Extended `tests/test_chord_candidate_resolution.py` for handwritten
+major-seventh uncertainty and for preserving clear minor-seventh corrections.
+
+Extended `tests/test_chord_ocr_backend.py` for the split-token merge and for
+leaving separated chords unmerged.
+
 ## 2026-06-04 - Handwritten-style chord OCR repair pass
 
 ### Starting point

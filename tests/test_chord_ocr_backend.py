@@ -280,6 +280,44 @@ def test_rejected_near_chord_reports_uncertain_candidate_context(monkeypatch) ->
     ]
 
 
+def test_split_chord_repair_merges_touching_root_and_major_seventh_tail() -> None:
+    tokens = [
+        ChordToken(
+            "Bb",
+            "Bb",
+            (1000.0, 1520.0, 1072.0, 1598.0),
+            confidence=0.21,
+            system_index=6,
+        ),
+        ChordToken(
+            "an7",
+            "Ab7",
+            (1072.0, 1520.0, 1180.0, 1598.0),
+            confidence=0.21,
+            system_index=6,
+        ),
+    ]
+
+    repaired = ocr_backend._repair_split_chord_tokens(tokens)
+
+    assert len(repaired) == 1
+    assert repaired[0].text_raw == "Bban7"
+    assert repaired[0].text_norm == "Bbmaj7"
+    assert repaired[0].bbox == (1000.0, 1520.0, 1180.0, 1598.0)
+    assert repaired[0].system_index == 6
+
+
+def test_split_chord_repair_leaves_separated_chords_unmerged() -> None:
+    tokens = [
+        ChordToken("Bb", "Bb", (100.0, 20.0, 130.0, 40.0), confidence=0.8),
+        ChordToken("Ab7", "Ab7", (180.0, 20.0, 220.0, 40.0), confidence=0.8),
+    ]
+
+    repaired = ocr_backend._repair_split_chord_tokens(tokens)
+
+    assert [token.text_norm for token in repaired] == ["Bb", "Ab7"]
+
+
 def test_low_confidence_chord_like_hit_reports_uncertain_context(monkeypatch) -> None:
     monkeypatch.setattr(ocr_backend, "preprocess_for_ocr", lambda image, scale: image)
     monkeypatch.setattr(ocr_backend, "_get_reader", lambda gpu=False: object())

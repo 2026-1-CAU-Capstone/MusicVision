@@ -241,6 +241,62 @@ Regression check on the earlier saved samples:
 | Take The A Train | `16.144s`, `30` kept, `4` rejects | `15.848s`, `30` kept, `4` rejects |
 | Autumn Leaves | `16.330s`, `32` kept, `9` rejects | `15.869s`, `32` kept, `9` rejects |
 
+## 2026-06-04 handwritten maj7 diagnostics and split-token merge benchmark
+
+Inputs:
+
+```text
+storage/jobs/afternoon_in_paris-new_ocr_benchmark_20260604-0026/output
+storage/jobs/bench-candidate-resolution-take-the-a-train-20260604/output
+storage/jobs/bench-candidate-resolution-autumn-leaves-20260604/output
+```
+
+Environment:
+
+- local Windows development machine
+- project virtualenv
+- CPU execution
+- no GPU accelerator detected
+- EasyOCR reader warmed before timing
+- benchmark reused saved `homr_processed.png` and `geometry.json`
+- benchmark isolated OCR extraction, visual filtering, and measure assignment;
+  HOMR was not rerun
+
+This benchmark measured one final non-LLM pass for handwritten-style chord
+fonts. The implementation added diagnostic-first handwritten `maj7` suggestions
+for damaged suffixes such as `Ctin`, `Coi1`, `Can`, `Alm4i1`, and `Cn+i`, plus
+a bounded same-system split-token merge for cases like `Bb` plus `an7`/`Ab7`.
+
+Saved benchmark jobs:
+
+```text
+storage/jobs/bench-handwritten-ocr-split-merge-afternoon-in-paris-20260604
+storage/jobs/bench-handwritten-ocr-split-merge-take-the-a-train-20260604
+storage/jobs/bench-handwritten-ocr-split-merge-autumn-leaves-20260604
+```
+
+| Sample | Pipeline state | OCR+filter+assign time | Accepted before filters | Kept after filters | Rejected hits | Filtered hits | Uncertain rejected hits |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Afternoon in Paris | Suspicious accepted-token repair | `14.727s` | `33` | `33` | `7` | `0` | `4` |
+| Afternoon in Paris | Split merge + handwritten maj7 diagnostics | `14.730s` | `32` | `32` | `7` | `0` | `5` |
+| Take The A Train | Suspicious accepted-token repair | `15.848s` | `30` | `30` | `4` | `0` | `0` |
+| Take The A Train | Split merge + handwritten maj7 diagnostics | `14.637s` | `30` | `30` | `4` | `0` | `2` |
+| Autumn Leaves | Suspicious accepted-token repair | `15.869s` | `34` | `32` | `9` | `2` | `1` |
+| Autumn Leaves | Split merge + handwritten maj7 diagnostics | `15.400s` | `34` | `32` | `9` | `2` | `1` |
+
+Afternoon in Paris kept one fewer token because the previous split `Bb` plus
+`Ab7` pair is now one corrected `Bbmaj7`; this is an accuracy improvement, not
+a missing chord. The pass also exposes one more uncertain low-confidence
+handwritten-major-seventh candidate.
+
+The first saved Afternoon timing was `17.190s`, then three immediate warmed
+reruns measured `14.986s`, `14.835s`, and `14.730s`. The table uses the
+repeated warmed runtime so it matches the established warmed benchmark method.
+
+This pass should be kept as a bounded improvement, but it does not solve every
+handwritten-style font issue. Accepted-but-wrong tokens such as `Abm11`, `Cm7`,
+`C79`, and `G9)` remain.
+
 ## Timing results
 
 Cold-ish runs used separate Python processes, so each run included its own model

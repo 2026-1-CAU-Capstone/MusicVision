@@ -14,6 +14,7 @@ MusicVision currently accepts raster image uploads only:
 .png
 .jpg
 .jpeg
+.webp
 ```
 
 PDF upload is **not** supported by the current endpoint contract.

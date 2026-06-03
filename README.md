@@ -11,10 +11,11 @@ python -m pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-The API currently accepts `.png`, `.jpg`, and `.jpeg` inputs. `POST /omr/process`
-is the legacy synchronous endpoint and returns after OMR completes. Async callers
-should use `POST /omr/dev/process` for request-supplied callbacks or
-`POST /omr/prod/process` for domain-validated production callbacks.
+The API currently accepts `.png`, `.jpg`, `.jpeg`, and `.webp` inputs.
+`POST /omr/process` is the legacy synchronous endpoint and returns after OMR
+completes. Async callers should use `POST /omr/dev/process` for
+request-supplied callbacks or `POST /omr/prod/process` for domain-validated
+production callbacks.
 Completed jobs produce `.musicxml` output plus a structured
 `chord_assignments.json` containing OCR-read printed chord symbols assigned to
 visual measures.

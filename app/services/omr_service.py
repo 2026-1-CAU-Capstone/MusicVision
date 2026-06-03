@@ -239,9 +239,13 @@ def run_chord_chart_pipeline(
     output_dir: Path,
     logs_dir: Path,
 ) -> ChordChartPipelineResult:
-    del intermediate_dir, logs_dir
+    del logs_dir
 
-    image = load_rgb_image(input_file_path)
+    preprocessed_input_path = preprocess_input(
+        input_file_path=input_file_path,
+        intermediate_dir=intermediate_dir,
+    )
+    image = load_rgb_image(preprocessed_input_path)
     rows = detect_chart_grid(image)
     page_tokens, page_rejects = extract_chart_ocr_tokens(image)
     cell_tokens, cell_rejects = extract_chart_cell_ocr_tokens(image, rows)

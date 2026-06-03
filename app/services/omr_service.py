@@ -70,7 +70,11 @@ def run_omr_pipeline(
     expected_measure_counts_by_system = read_musicxml_system_measure_counts(
         homr_artifacts.musicxml_path,
     )
-    chord_tokens, ocr_rejects = extract_chord_tokens_ocr(processed_image)
+    chord_tokens, ocr_rejects, ocr_strategy = extract_chord_tokens_ocr(
+        processed_image,
+        geometry=geometry,
+        return_strategy=True,
+    )
     chord_tokens, filtered_hits = filter_probable_non_chords(
         tokens=chord_tokens,
         image=processed_image,
@@ -107,6 +111,7 @@ def run_omr_pipeline(
     )
     ocr_diagnostics = {
         "backend": "easyocr",
+        "strategy": ocr_strategy,
         "accepted_tokens": [serialize_token(token) for token in chord_tokens],
         "rejected_hits": ocr_rejects,
         "filtered_hits": filtered_hits,
@@ -157,7 +162,11 @@ def run_sheet_music_chord_pipeline(
     )
     processed_image = load_rgb_image(homr_artifacts.processed_image_path)
     geometry = load_geometry_json(homr_artifacts.geometry_json_path)
-    chord_tokens, ocr_rejects = extract_chord_tokens_ocr(processed_image)
+    chord_tokens, ocr_rejects, ocr_strategy = extract_chord_tokens_ocr(
+        processed_image,
+        geometry=geometry,
+        return_strategy=True,
+    )
     chord_tokens, filtered_hits = filter_probable_non_chords(
         tokens=chord_tokens,
         image=processed_image,
@@ -171,6 +180,7 @@ def run_sheet_music_chord_pipeline(
     )
     ocr_diagnostics = {
         "backend": "easyocr",
+        "strategy": ocr_strategy,
         "accepted_tokens": [serialize_token(token) for token in chord_tokens],
         "rejected_hits": ocr_rejects,
         "filtered_hits": filtered_hits,

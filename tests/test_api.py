@@ -75,7 +75,15 @@ def test_process_omr_creates_outputs(
     monkeypatch.setattr(
         omr_service,
         "extract_chord_tokens_ocr",
-        lambda _image: ([], []),
+        lambda _image, **_kwargs: (
+            [],
+            [],
+            {
+                "mode": "full_page",
+                "targeted": {"attempted": False, "reason": "test"},
+                "fallback": {"triggered": False, "reason": None},
+            },
+        ),
     )
     monkeypatch.setattr(
         omr_service,
@@ -161,6 +169,11 @@ def test_process_omr_creates_outputs(
     ] == "1"
     assert chord_assignments_payload.json()["chord_ocr"] == {
         "backend": "easyocr",
+        "strategy": {
+            "mode": "full_page",
+            "targeted": {"attempted": False, "reason": "test"},
+            "fallback": {"triggered": False, "reason": None},
+        },
         "accepted_tokens": [],
         "rejected_hits": [],
         "filtered_hits": [],

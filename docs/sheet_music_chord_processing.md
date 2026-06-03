@@ -112,6 +112,41 @@ Assignment behavior:
 4. estimate beat position within the measure where practical
 5. use the CV fallback only if HOMR geometry is missing, incomplete, or unusable
 
+### Targeted chord-band OCR
+
+The sheet-music OCR backend now uses HOMR geometry before recognition. Instead
+of sending the full processed page to EasyOCR first, it crops a likely chord band
+above each detected staff system and runs EasyOCR on those bands.
+
+This is still conservative:
+
+- the crop coordinates stay in `homr_processed_image` space
+- the same grammar and visual filters run after OCR
+- the original full-page EasyOCR pass remains available as a recall fallback
+
+The fallback is triggered when the targeted pass looks implausibly sparse:
+
+```text
+accepted_tokens == 0
+usable_system_crop_count / systems_total < 0.50
+systems_with_chords / systems_total < 0.25
+accepted_tokens / estimated_visual_measure_count < 0.20
+```
+
+When fallback runs, targeted and full-page OCR tokens are merged by normalized
+text and overlapping/nearby bounding boxes. The higher-confidence duplicate is
+kept. This lets targeted OCR remain the fast first pass while preserving the
+previous broad OCR behavior for unusual layouts where chords are not in the
+expected bands.
+
+`chord_ocr.strategy` records which path was used:
+
+```text
+full_page
+targeted_only
+targeted_with_full_page_fallback
+```
+
 ### Geometry repair heuristics
 
 HOMR geometry remains the preferred source of truth, but the assignment stage
@@ -342,6 +377,23 @@ Example shape:
   },
   "chord_ocr": {
     "backend": "easyocr",
+    "strategy": {
+      "mode": "targeted_only",
+      "targeted": {
+        "attempted": true,
+        "regions": 8,
+        "systems_total": 8,
+        "usable_system_crop_count": 8,
+        "estimated_visual_measures": 31,
+        "accepted_tokens_before_visual_filters": 21,
+        "rejected_hits": 14,
+        "systems_with_chords": 7
+      },
+      "fallback": {
+        "triggered": false,
+        "reason": null
+      }
+    },
     "accepted_tokens": [],
     "rejected_hits": [],
     "filtered_hits": []

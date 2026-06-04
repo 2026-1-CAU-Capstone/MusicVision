@@ -57,6 +57,14 @@ CHORD_ASSIGNMENTS_FILENAME = "chord_assignments.json"
 CHORD_CHART_FILENAME = "chord_chart.json"
 OMR_API_KEY_HEADER = "X-OMR-API-Key"
 OMR_CALLBACK_API_KEY_HEADER = "X-OMR-Callback-API-Key"
+CALLBACK_OMITTED_FIELDS = {
+    "callback_url",
+    "callback_error",
+    "progress",
+    "stage",
+    "current_step",
+    "total_steps",
+}
 logger = logging.getLogger("musicvision.omr")
 
 
@@ -390,6 +398,58 @@ def process_chord_chart_prod(
 
 
 @router.post(
+    "/chords/sheet-music/dev/process",
+    response_model=OMRProcessQueuedResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[
+        Depends(log_process_request),
+        Depends(require_configured_omr_api_key),
+    ],
+)
+def process_sheet_music_chords_dev(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    job_id: str | None = Form(default=None),
+    callback_url: str | None = Form(default=None),
+) -> OMRProcessQueuedResponse:
+    safe_callback_url = _validate_callback_url(
+        callback_url,
+        error_detail="callback_url must be an absolute http(s) URL.",
+    )
+    return _queue_sheet_music_chord_job(
+        background_tasks=background_tasks,
+        file=file,
+        job_id=job_id,
+        callback_url=safe_callback_url,
+    )
+
+
+@router.post(
+    "/chords/sheet-music/prod/process",
+    response_model=OMRProcessQueuedResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[
+        Depends(log_process_request),
+        Depends(require_configured_omr_api_key),
+    ],
+)
+def process_sheet_music_chords_prod(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    job_id: str | None = Form(default=None),
+    callback_url: str | None = Form(default=None),
+) -> OMRProcessQueuedResponse:
+    return _queue_sheet_music_chord_job(
+        background_tasks=background_tasks,
+        file=file,
+        job_id=job_id,
+        callback_url=_resolve_prod_callback_url(callback_url),
+    )
+
+
+@router.post(
     "/omr/prod/process",
     response_model=OMRProcessQueuedResponse,
     response_model_exclude_none=True,
@@ -430,6 +490,8 @@ def _queue_omr_job(
         safe_job_id,
         status="queued",
         message="OMR processing queued",
+        progress=0,
+        stage="queued",
         callback_url=callback_url,
     )
     background_tasks.add_task(
@@ -466,6 +528,8 @@ def _queue_chord_chart_job(
         safe_job_id,
         status="queued",
         message="Chord chart processing queued",
+        progress=0,
+        stage="queued",
         callback_url=callback_url,
     )
     background_tasks.add_task(
@@ -482,6 +546,44 @@ def _queue_chord_chart_job(
         job_id=safe_job_id,
         status="queued",
         message="Chord chart processing queued",
+    )
+
+
+def _queue_sheet_music_chord_job(
+    *,
+    background_tasks: BackgroundTasks,
+    file: UploadFile,
+    job_id: str | None,
+    callback_url: str | None,
+) -> OMRProcessQueuedResponse:
+    safe_job_id, input_file_path, job_paths = _save_omr_upload(
+        file=file,
+        job_id=job_id,
+        callback_url=callback_url,
+    )
+
+    write_job_status(
+        safe_job_id,
+        status="queued",
+        message="Sheet music chord processing queued",
+        progress=0,
+        stage="queued",
+        callback_url=callback_url,
+    )
+    background_tasks.add_task(
+        _run_sheet_music_chord_job,
+        job_id=safe_job_id,
+        input_file_path=input_file_path,
+        intermediate_dir=job_paths.intermediate_dir,
+        output_dir=job_paths.output_dir,
+        logs_dir=job_paths.logs_dir,
+        callback_url=callback_url,
+    )
+
+    return OMRProcessQueuedResponse(
+        job_id=safe_job_id,
+        status="queued",
+        message="Sheet music chord processing queued",
     )
 
 
@@ -681,6 +783,8 @@ def _run_omr_job(
         job_id,
         status="processing",
         message="OMR processing in progress",
+        progress=10,
+        stage="omr_processing",
         callback_url=callback_url,
     )
 
@@ -709,6 +813,8 @@ def _run_omr_job(
         job_id,
         status="completed",
         message="OMR processing completed",
+        progress=100,
+        stage="completed",
         musicxml_path=_relative_path(pipeline_result.musicxml_path),
         chord_assignments_path=_relative_path(pipeline_result.chord_assignments_path),
         callback_url=callback_url,
@@ -729,6 +835,8 @@ def _run_chord_chart_job(
         job_id,
         status="processing",
         message="Chord chart processing in progress",
+        progress=5,
+        stage="starting",
         callback_url=callback_url,
     )
 
@@ -739,6 +847,10 @@ def _run_chord_chart_job(
             intermediate_dir=intermediate_dir,
             output_dir=output_dir,
             logs_dir=logs_dir,
+            progress_callback=_chord_chart_progress_callback(
+                job_id=job_id,
+                callback_url=callback_url,
+            ),
         )
     except Exception as exc:
         logger.exception("Chord chart processing failed: job_id=%s", job_id)
@@ -757,10 +869,95 @@ def _run_chord_chart_job(
         job_id,
         status="completed",
         message="Chord chart processing completed",
+        progress=100,
+        stage="completed",
         chord_chart_path=_relative_path(pipeline_result.chord_chart_path),
         callback_url=callback_url,
     )
     _send_job_callback(job_id, callback_url, payload)
+
+
+def _run_sheet_music_chord_job(
+    *,
+    job_id: str,
+    input_file_path: Path,
+    intermediate_dir: Path,
+    output_dir: Path,
+    logs_dir: Path,
+    callback_url: str | None,
+) -> None:
+    write_job_status(
+        job_id,
+        status="processing",
+        message="Sheet music chord processing in progress",
+        progress=10,
+        stage="sheet_music_chord_processing",
+        callback_url=callback_url,
+    )
+
+    try:
+        pipeline_result = run_sheet_music_chord_pipeline(
+            job_id=job_id,
+            input_file_path=input_file_path,
+            intermediate_dir=intermediate_dir,
+            output_dir=output_dir,
+            logs_dir=logs_dir,
+        )
+    except Exception as exc:
+        logger.exception("Sheet music chord processing failed: job_id=%s", job_id)
+        error_message = str(exc) or exc.__class__.__name__
+        payload = write_job_status(
+            job_id,
+            status="failed",
+            message="Sheet music chord processing failed",
+            callback_url=callback_url,
+            error=error_message,
+        )
+        _send_job_callback(job_id, callback_url, payload)
+        return
+
+    payload = write_job_status(
+        job_id,
+        status="completed",
+        message="Sheet music chord processing completed",
+        progress=100,
+        stage="completed",
+        chord_assignments_path=_relative_path(pipeline_result.chord_assignments_path),
+        callback_url=callback_url,
+    )
+    _send_job_callback(job_id, callback_url, payload)
+
+
+def _chord_chart_progress_callback(
+    *,
+    job_id: str,
+    callback_url: str | None,
+):
+    def record_progress(
+        progress: int,
+        stage: str,
+        message: str | None,
+        current_step: int | None,
+        total_steps: int | None,
+    ) -> None:
+        current_status = read_job_status(job_id) or {"job_id": job_id}
+        write_job_status(
+            job_id,
+            status="processing",
+            message=message or "Chord chart processing in progress",
+            progress=max(0, min(99, int(progress))),
+            stage=stage,
+            current_step=current_step,
+            total_steps=total_steps,
+            musicxml_path=current_status.get("musicxml_path"),
+            chord_assignments_path=current_status.get("chord_assignments_path"),
+            chord_chart_path=current_status.get("chord_chart_path"),
+            callback_url=callback_url,
+            error=current_status.get("error"),
+            callback_error=current_status.get("callback_error"),
+        )
+
+    return record_progress
 
 
 def _send_job_callback(
@@ -774,7 +971,7 @@ def _send_job_callback(
     callback_payload = {
         key: value
         for key, value in payload.items()
-        if key not in {"callback_url", "callback_error"}
+        if key not in CALLBACK_OMITTED_FIELDS
     }
     callback_error = _post_job_callback(callback_url, callback_payload)
 
@@ -887,6 +1084,10 @@ def _job_status_response_from_record(
         job_id=job_id,
         status=record.get("status", "processing"),
         message=record.get("message"),
+        progress=record.get("progress"),
+        stage=record.get("stage"),
+        current_step=record.get("current_step"),
+        total_steps=record.get("total_steps"),
         musicxml_path=record.get("musicxml_path"),
         chord_assignments_path=record.get("chord_assignments_path"),
         chord_chart_path=record.get("chord_chart_path"),

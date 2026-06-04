@@ -11,10 +11,11 @@ python -m pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-The API currently accepts `.png`, `.jpg`, and `.jpeg` inputs. `POST /omr/process`
-is the legacy synchronous endpoint and returns after OMR completes. Async callers
-should use `POST /omr/dev/process` for request-supplied callbacks or
-`POST /omr/prod/process` for domain-validated production callbacks.
+The API currently accepts `.png`, `.jpg`, `.jpeg`, and `.webp` inputs.
+`POST /omr/process` is the legacy synchronous endpoint and returns after OMR
+completes. Async callers should use `POST /omr/dev/process` for
+request-supplied callbacks or `POST /omr/prod/process` for domain-validated
+production callbacks.
 Completed jobs produce `.musicxml` output plus a structured
 `chord_assignments.json` containing OCR-read printed chord symbols assigned to
 visual measures.
@@ -84,6 +85,18 @@ coordinate-space rules are documented in:
 ```text
 docs/sheet_music_chord_processing.md
 ```
+
+Optional handwritten-style chord rescue can be enabled with an isolated
+PaddleOCR virtualenv so the main HOMR/EasyOCR environment keeps its NumPy
+version:
+
+```powershell
+$env:MUSICVISION_PADDLEOCR_PYTHON = "$env:TEMP\musicvision-paddleocr-venv\Scripts\python.exe"
+$env:MUSICVISION_PADDLEOCR_RESCUE_MODE = "adjudicated"
+```
+
+Leave `MUSICVISION_PADDLEOCR_RESCUE_MODE` unset or set to `off` to use the
+default EasyOCR-only production path.
 
 Consumer-facing API integration docs for the Spring Boot backend and frontend are
 in:

@@ -18,7 +18,7 @@ OMR_CALLBACK_API_KEY = os.getenv("OMR_CALLBACK_API_KEY")
 
 # HOMR currently consumes raster image files directly. PDF support can be
 # reintroduced once preprocess_input() rasterizes pages before OMR execution.
-ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
 
 for directory in (UPLOADS_DIR, JOBS_DIR, OUTPUTS_DIR):

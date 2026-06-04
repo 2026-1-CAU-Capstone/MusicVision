@@ -261,7 +261,7 @@ def test_process_sheet_music_chords_returns_assignments(
     response = client.post(
         "/chords/sheet-music/process",
         data={"job_id": "chord-only-job"},
-        files={"file": ("score.png", BytesIO(b"fake-image"), "image/png")},
+        files={"file": ("score.webp", BytesIO(b"fake-image"), "image/webp")},
     )
 
     assert response.status_code == 200
@@ -301,7 +301,145 @@ def test_process_sheet_music_chords_rejects_unsupported_extensions(
 
     assert response.status_code == 400
     assert response.json() == {
-        "detail": "Unsupported file extension. Allowed extensions: .jpeg, .jpg, .png"
+        "detail": "Unsupported file extension. Allowed extensions: .jpeg, .jpg, .png, .webp"
+    }
+
+
+def test_dev_process_sheet_music_chords_requires_api_key_configuration(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(omr_endpoint, "OMR_API_KEY", None)
+
+    response = client.post(
+        "/chords/sheet-music/dev/process",
+        files={"file": ("score.png", BytesIO(b"fake-image"), "image/png")},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "OMR API key is not configured."}
+
+
+def test_prod_process_sheet_music_chords_rejects_untrusted_callback_host(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(omr_endpoint, "OMR_API_KEY", "omr-secret")
+    monkeypatch.setattr(
+        omr_endpoint,
+        "OMR_CALLBACK_URL",
+        "https://backend.example/fixed-omr-callback",
+    )
+
+    response = client.post(
+        "/chords/sheet-music/prod/process",
+        headers={"X-OMR-API-Key": "omr-secret"},
+        data={"callback_url": "https://other.example/sheet-callback"},
+        files={"file": ("score.png", BytesIO(b"fake-image"), "image/png")},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": (
+            "callback_url host is not allowed. "
+            "It must match the configured OMR_CALLBACK_URL host."
+        )
+    }
+
+
+def test_prod_process_sheet_music_chords_uses_domain_validated_request_callback(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    callbacks: list[tuple[str, dict[str, object]]] = []
+
+    def fake_run_sheet_music_chord_pipeline(
+        *,
+        job_id: str,
+        input_file_path: Path,
+        intermediate_dir: Path,
+        output_dir: Path,
+        logs_dir: Path,
+    ) -> omr_service.SheetMusicChordPipelineResult:
+        chord_assignments_path = output_dir / "chord_assignments.json"
+        chord_assignments_path.write_text(
+            json.dumps(
+                {
+                    "job_id": job_id,
+                    "source_file": input_file_path.name,
+                    "source_type": "sheet_music",
+                    "pipeline": "homr_geometry_only",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return omr_service.SheetMusicChordPipelineResult(
+            chord_assignments_path=chord_assignments_path,
+        )
+
+    def fake_post_job_callback(
+        callback_url: str,
+        payload: dict[str, object],
+    ) -> None:
+        callbacks.append((callback_url, payload))
+
+    monkeypatch.setattr(omr_endpoint, "OMR_API_KEY", "omr-secret")
+    monkeypatch.setattr(
+        omr_endpoint,
+        "OMR_CALLBACK_URL",
+        "https://backend.example/fixed-omr-callback",
+    )
+    monkeypatch.setattr(
+        omr_endpoint,
+        "run_sheet_music_chord_pipeline",
+        fake_run_sheet_music_chord_pipeline,
+    )
+    monkeypatch.setattr(omr_endpoint, "_post_job_callback", fake_post_job_callback)
+
+    response = client.post(
+        "/chords/sheet-music/prod/process",
+        headers={"X-OMR-API-Key": "omr-secret"},
+        data={
+            "job_id": "callback-sheet-chord-job",
+            "callback_url": "https://backend.example/sheet-callback",
+        },
+        files={"file": ("score.png", BytesIO(b"fake-image"), "image/png")},
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "job_id": "callback-sheet-chord-job",
+        "status": "queued",
+        "message": "Sheet music chord processing queued",
+    }
+    assert callbacks == [
+        (
+            "https://backend.example/sheet-callback",
+            {
+                "job_id": "callback-sheet-chord-job",
+                "status": "completed",
+                "message": "Sheet music chord processing completed",
+                "chord_assignments_path": (
+                    "jobs/callback-sheet-chord-job/output/chord_assignments.json"
+                ),
+            },
+        )
+    ]
+
+    completed = client.get(
+        "/omr/jobs/callback-sheet-chord-job",
+        headers={"X-OMR-API-Key": "omr-secret"},
+    )
+    assert completed.status_code == 200
+    assert completed.json() == {
+        "job_id": "callback-sheet-chord-job",
+        "status": "completed",
+        "message": "Sheet music chord processing completed",
+        "progress": 100,
+        "stage": "completed",
+        "chord_assignments_path": (
+            "jobs/callback-sheet-chord-job/output/chord_assignments.json"
+        ),
     }
 
 
@@ -379,7 +517,7 @@ def test_process_chord_chart_returns_chart(
     response = client.post(
         "/chords/chart/process",
         data={"job_id": "chart-job"},
-        files={"file": ("chart.png", BytesIO(b"fake-image"), "image/png")},
+        files={"file": ("chart.webp", BytesIO(b"fake-image"), "image/webp")},
     )
 
     assert response.status_code == 200
@@ -454,7 +592,7 @@ def test_process_omr_rejects_unsupported_extensions(client: TestClient) -> None:
 
     assert response.status_code == 400
     assert response.json() == {
-        "detail": "Unsupported file extension. Allowed extensions: .jpeg, .jpg, .png"
+        "detail": "Unsupported file extension. Allowed extensions: .jpeg, .jpg, .png, .webp"
     }
 
 
@@ -725,6 +863,7 @@ def test_prod_process_chord_chart_uses_domain_validated_request_callback(
         intermediate_dir: Path,
         output_dir: Path,
         logs_dir: Path,
+        progress_callback: object | None = None,
     ) -> omr_service.ChordChartPipelineResult:
         chord_chart_path = output_dir / "chord_chart.json"
         chord_chart_path.write_text('{"source_type":"chord_chart"}', encoding="utf-8")
@@ -776,6 +915,19 @@ def test_prod_process_chord_chart_uses_domain_validated_request_callback(
             },
         )
     ]
+    completed = client.get(
+        "/omr/jobs/callback-chart-job",
+        headers={"X-OMR-API-Key": "omr-secret"},
+    )
+    assert completed.status_code == 200
+    assert completed.json() == {
+        "job_id": "callback-chart-job",
+        "status": "completed",
+        "message": "Chord chart processing completed",
+        "progress": 100,
+        "stage": "completed",
+        "chord_chart_path": "jobs/callback-chart-job/output/chord_chart.json",
+    }
 
 
 def test_omr_api_key_is_required_when_configured(
@@ -829,6 +981,47 @@ def test_callback_api_key_header_is_sent(
 
     assert callback_error is None
     assert captured_headers["X-omr-callback-api-key"] == "callback-secret"
+
+
+def test_terminal_callback_omits_polling_progress_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    callbacks: list[tuple[str, dict[str, object]]] = []
+
+    def fake_post_job_callback(
+        callback_url: str,
+        payload: dict[str, object],
+    ) -> None:
+        callbacks.append((callback_url, payload))
+
+    monkeypatch.setattr(omr_endpoint, "_post_job_callback", fake_post_job_callback)
+
+    omr_endpoint._send_job_callback(
+        "progress-job",
+        "https://backend.example/omr-callbacks",
+        {
+            "job_id": "progress-job",
+            "status": "completed",
+            "message": "Chord chart processing completed",
+            "progress": 100,
+            "stage": "completed",
+            "current_step": 4,
+            "total_steps": 4,
+            "chord_chart_path": "jobs/progress-job/output/chord_chart.json",
+        },
+    )
+
+    assert callbacks == [
+        (
+            "https://backend.example/omr-callbacks",
+            {
+                "job_id": "progress-job",
+                "status": "completed",
+                "message": "Chord chart processing completed",
+                "chord_chart_path": "jobs/progress-job/output/chord_chart.json",
+            },
+        )
+    ]
 
 
 def test_dev_process_omr_records_failed_background_job(
@@ -889,8 +1082,18 @@ def test_dev_process_omr_records_failed_background_job(
 def test_job_status_reports_processing_and_missing(client: TestClient, tmp_path) -> None:
     processing_job_dir = tmp_path / "jobs" / "pending-job"
     processing_job_dir.mkdir(parents=True)
+    omr_endpoint.write_job_status(
+        "progress-job",
+        status="processing",
+        message="Reading chart cells",
+        progress=62,
+        stage="cell_ocr",
+        current_step=12,
+        total_steps=30,
+    )
 
     processing = client.get("/omr/jobs/pending-job")
+    progress = client.get("/omr/jobs/progress-job")
     missing = client.get("/omr/jobs/missing-job")
 
     assert processing.status_code == 200
@@ -898,6 +1101,16 @@ def test_job_status_reports_processing_and_missing(client: TestClient, tmp_path)
         "job_id": "pending-job",
         "status": "processing",
         "message": "OMR processing in progress",
+    }
+    assert progress.status_code == 200
+    assert progress.json() == {
+        "job_id": "progress-job",
+        "status": "processing",
+        "message": "Reading chart cells",
+        "progress": 62,
+        "stage": "cell_ocr",
+        "current_step": 12,
+        "total_steps": 30,
     }
     assert missing.status_code == 200
     assert missing.json() == {"job_id": "missing-job", "status": "not_found"}

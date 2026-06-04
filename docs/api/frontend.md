@@ -138,6 +138,7 @@ The current MusicVision service accepts:
 .png
 .jpg
 .jpeg
+.webp
 ```
 
 PDF input is not supported by the current OMR endpoint yet.

@@ -11,11 +11,13 @@ MusicVision exposes async upload endpoints for Spring Boot integration:
 | --- | --- | --- |
 | `POST /omr/dev/process` | local/dev integration and callback testing | accepts optional request `callback_url` |
 | `POST /omr/prod/process` | deployed backend integration | requires request `callback_url`; host must match configured `OMR_CALLBACK_URL` |
+| `POST /chords/sheet-music/dev/process` | local/dev chord-only sheet-music integration and callback testing | accepts optional request `callback_url`; requires `X-OMR-API-Key` |
+| `POST /chords/sheet-music/prod/process` | deployed chord-only sheet-music integration | requires request `callback_url`; host must match configured `OMR_CALLBACK_URL`; requires `X-OMR-API-Key` |
 | `POST /chords/chart/dev/process` | local/dev chord-chart integration and callback testing | accepts optional request `callback_url`; requires `X-OMR-API-Key` |
 | `POST /chords/chart/prod/process` | deployed chord-chart integration | requires request `callback_url`; host must match configured `OMR_CALLBACK_URL`; requires `X-OMR-API-Key` |
 
-Both endpoints store the upload, queue the OMR job, and return
-`202 Accepted`. Both also support polling with `GET /omr/jobs/{job_id}`.
+These async endpoints store the upload, queue the OMR job, and return
+`202 Accepted`. They also support polling with `GET /omr/jobs/{job_id}`.
 
 ### Development async endpoint
 
@@ -32,7 +34,7 @@ Form fields:
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `file` | yes | `.png`, `.jpg`, or `.jpeg` only |
+| `file` | yes | `.png`, `.jpg`, `.jpeg`, or `.webp` only |
 | `job_id` | no | If supplied, use only letters, numbers, `_`, `-`; max 128 chars |
 | `callback_url` | no | Absolute `http` or `https` URL; if omitted, poll the status endpoint |
 
@@ -60,9 +62,9 @@ Success response:
 
 When `OMR_API_KEY` is configured, the OMR development endpoint requires
 `X-OMR-API-Key`. In local development, leaving `OMR_API_KEY` empty keeps the OMR
-development endpoint open for convenience. The chord-chart development endpoint
-always requires `OMR_API_KEY` to be configured and supplied through
-`X-OMR-API-Key`.
+development endpoint open for convenience. The chord-only sheet-music and
+chord-chart development endpoints always require `OMR_API_KEY` to be configured
+and supplied through `X-OMR-API-Key`.
 
 ### Production async endpoint
 
@@ -80,7 +82,7 @@ Form fields:
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `file` | yes | `.png`, `.jpg`, or `.jpeg` only |
+| `file` | yes | `.png`, `.jpg`, `.jpeg`, or `.webp` only |
 | `job_id` | no | If supplied, use only letters, numbers, `_`, `-`; max 128 chars |
 | `callback_url` | yes | Absolute `http` or `https` URL; host must match configured `OMR_CALLBACK_URL` host |
 
@@ -118,7 +120,22 @@ payloads are **MusicVision-local artifact paths**, not frontend URLs.
 The backend should retrieve the files through the API endpoints below rather than
 depending on MusicVision's filesystem layout.
 
-Chord-chart processing can be synchronous or async:
+Chord-only sheet-music processing can be synchronous or async:
+
+```text
+POST /chords/sheet-music/process
+POST /chords/sheet-music/dev/process
+POST /chords/sheet-music/prod/process
+Content-Type: multipart/form-data
+X-OMR-API-Key: <omr-api-key>
+```
+
+The synchronous endpoint returns `chord_assignments.json` inline and also stores
+it for retrieval through `GET /omr/jobs/{job_id}/chord-assignments`. The
+dev/prod sheet-music chord endpoints queue the same chord-only pipeline and use
+the callback rules above.
+
+Chord-chart processing can also be synchronous or async:
 
 ```text
 POST /chords/chart/process
@@ -136,9 +153,14 @@ endpoints queue the same chart pipeline and use the callback rules above.
 
 When a callback URL is present, MusicVision posts a JSON payload after the job
 reaches a terminal state. For `/omr/dev/process` and
-`/chords/chart/dev/process`, that URL comes from the request `callback_url`; for
-`/omr/prod/process` and `/chords/chart/prod/process`, it also comes from the
-request `callback_url` after host validation against `OMR_CALLBACK_URL`.
+`/chords/sheet-music/dev/process` and `/chords/chart/dev/process`, that URL
+comes from the request `callback_url`; for `/omr/prod/process`,
+`/chords/sheet-music/prod/process`, and `/chords/chart/prod/process`, it also
+comes from the request `callback_url` after host validation against
+`OMR_CALLBACK_URL`.
+
+Callbacks are terminal notifications only. MusicVision does not send callbacks
+for every progress update; use the status endpoint below for polling progress.
 
 When `OMR_CALLBACK_API_KEY` is configured, MusicVision also sends:
 
@@ -339,8 +361,10 @@ Representative payload:
 ### Production flow
 
 1. Receive the uploaded image from the frontend.
-2. Send it to `POST /omr/prod/process` with `X-OMR-API-Key` and a
-   domain-validated `callback_url`.
+2. Send it to the selected production endpoint with `X-OMR-API-Key` and a
+   domain-validated `callback_url`: `POST /omr/prod/process` for full OMR,
+   `POST /chords/sheet-music/prod/process` for chord-only sheet music, or
+   `POST /chords/chart/prod/process` for chord charts.
 3. Store the returned `job_id` and mark the backend job as queued.
 4. Wait for the MusicVision callback, or poll `GET /omr/jobs/{job_id}` until it reports `completed` or `failed`.
 5. When completed, fetch:
@@ -420,6 +444,42 @@ Returns:
 }
 ```
 
+While an async job is queued or processing, the status payload may include
+polling-oriented progress fields:
+
+```json
+{
+  "job_id": "demo-chart",
+  "status": "processing",
+  "message": "Reading chart cells (12/30)",
+  "progress": 62,
+  "stage": "cell_ocr",
+  "current_step": 12,
+  "total_steps": 30
+}
+```
+
+`progress` is an integer percentage from `0` to `100`. The frontend should poll
+the Spring Boot backend, and Spring Boot should poll this MusicVision endpoint
+server-to-server with `X-OMR-API-Key`; do not expose the MusicVision API key to
+the browser.
+
+For chord-chart jobs, current stage values can include:
+
+```text
+queued
+starting
+preprocessing
+loading_image
+detecting_grid
+page_ocr
+cell_ocr
+parsing
+overlay
+exporting
+completed
+```
+
 Possible statuses:
 
 ```text
@@ -452,7 +512,7 @@ Example unsupported-file response:
 
 ```json
 {
-  "detail": "Unsupported file extension. Allowed extensions: .jpeg, .jpg, .png"
+  "detail": "Unsupported file extension. Allowed extensions: .jpeg, .jpg, .png, .webp"
 }
 ```
 

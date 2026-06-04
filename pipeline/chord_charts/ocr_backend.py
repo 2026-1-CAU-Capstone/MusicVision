@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -91,12 +92,15 @@ def extract_chart_cell_ocr_tokens(
     min_confidence: float = 0.05,
     gpu: bool = False,
     ocr_scale: float = 2.0,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> tuple[list[OCRToken], list[dict[str, Any]]]:
     reader = _get_reader(gpu=gpu)
     tokens: list[OCRToken] = []
     rejects: list[dict[str, Any]] = []
 
     row_list = list(rows)
+    total_regions = _count_cell_ocr_regions(row_list)
+    completed_regions = 0
     for row_position, row in enumerate(row_list):
         boundaries = getattr(row, "boundaries", [])
         for col_index, (left, right) in enumerate(zip(boundaries, boundaries[1:]), start=1):
@@ -110,6 +114,12 @@ def extract_chart_cell_ocr_tokens(
             y0 = int(max(0, float(row.y_top) - 35))
             y1 = int(min(image.shape[0], next_y_top - 8, float(row.y_bottom) + 80))
             if x1 <= x0 or y1 <= y0:
+                completed_regions += len(_cell_ocr_regions())
+                _report_cell_ocr_progress(
+                    progress_callback,
+                    completed=completed_regions,
+                    total=total_regions,
+                )
                 continue
 
             crop = image[y0:y1, x0:x1].copy()
@@ -121,6 +131,12 @@ def extract_chart_cell_ocr_tokens(
                 ry1 = int(crop_height * yb)
                 subcrop = crop[ry0:ry1, rx0:rx1]
                 if subcrop.size == 0:
+                    completed_regions += 1
+                    _report_cell_ocr_progress(
+                        progress_callback,
+                        completed=completed_regions,
+                        total=total_regions,
+                    )
                     continue
 
                 processed = preprocess_for_ocr(subcrop, scale=ocr_scale)
@@ -165,9 +181,33 @@ def extract_chart_cell_ocr_tokens(
                             source="cell_ocr",
                         )
                     )
+                completed_regions += 1
+                _report_cell_ocr_progress(
+                    progress_callback,
+                    completed=completed_regions,
+                    total=total_regions,
+                )
 
     tokens.sort(key=lambda token: (token.bbox[1], token.bbox[0]))
     return tokens, rejects
+
+
+def _count_cell_ocr_regions(rows: list[Any]) -> int:
+    region_count = len(_cell_ocr_regions())
+    return sum(
+        max(0, len(getattr(row, "boundaries", [])) - 1) * region_count
+        for row in rows
+    )
+
+
+def _report_cell_ocr_progress(
+    progress_callback: Callable[[int, int], None] | None,
+    *,
+    completed: int,
+    total: int,
+) -> None:
+    if progress_callback is not None:
+        progress_callback(completed, total)
 
 
 def _cell_ocr_regions() -> list[tuple[str, float, float, float, float]]:

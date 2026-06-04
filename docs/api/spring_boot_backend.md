@@ -140,6 +140,9 @@ reaches a terminal state. For `/omr/dev/process` and
 `/omr/prod/process` and `/chords/chart/prod/process`, it also comes from the
 request `callback_url` after host validation against `OMR_CALLBACK_URL`.
 
+Callbacks are terminal notifications only. MusicVision does not send callbacks
+for every progress update; use the status endpoint below for polling progress.
+
 When `OMR_CALLBACK_API_KEY` is configured, MusicVision also sends:
 
 ```text
@@ -418,6 +421,42 @@ Returns:
   "musicxml_path": "jobs/demo-job/output/score.musicxml",
   "chord_assignments_path": "jobs/demo-job/output/chord_assignments.json"
 }
+```
+
+While an async job is queued or processing, the status payload may include
+polling-oriented progress fields:
+
+```json
+{
+  "job_id": "demo-chart",
+  "status": "processing",
+  "message": "Reading chart cells (12/30)",
+  "progress": 62,
+  "stage": "cell_ocr",
+  "current_step": 12,
+  "total_steps": 30
+}
+```
+
+`progress` is an integer percentage from `0` to `100`. The frontend should poll
+the Spring Boot backend, and Spring Boot should poll this MusicVision endpoint
+server-to-server with `X-OMR-API-Key`; do not expose the MusicVision API key to
+the browser.
+
+For chord-chart jobs, current stage values can include:
+
+```text
+queued
+starting
+preprocessing
+loading_image
+detecting_grid
+page_ocr
+cell_ocr
+parsing
+overlay
+exporting
+completed
 ```
 
 Possible statuses:

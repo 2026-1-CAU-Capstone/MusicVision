@@ -42,6 +42,10 @@ class JobStatusResponse(BaseModel):
     job_id: str
     status: JobStatus
     message: str | None = None
+    progress: int | None = None
+    stage: str | None = None
+    current_step: int | None = None
+    total_steps: int | None = None
     musicxml_path: str | None = None
     chord_assignments_path: str | None = None
     chord_chart_path: str | None = None

@@ -644,13 +644,24 @@ POST /omr/dev/process   # async, request callback allowed
 POST /omr/prod/process  # async, domain-validated callback required
 ```
 
+The chord-only sheet-music API also has a synchronous endpoint and explicit
+dev/prod async endpoints:
+
+```text
+POST /chords/sheet-music/process       # sync chord-only sheet music
+POST /chords/sheet-music/dev/process   # async, request callback allowed
+POST /chords/sheet-music/prod/process  # async, domain-validated callback required
+```
+
 The async upload responses return `202 Accepted` with a queued `job_id`. Callers
 can poll `GET /omr/jobs/{job_id}` or use the configured callback flow to receive
 a completion/failure callback.
 
 The OMR endpoints can require `X-OMR-API-Key`. Production should call
-`POST /omr/prod/process` with a request `callback_url` whose host matches the
-configured `OMR_CALLBACK_URL` host. See
+`POST /omr/prod/process` for full OMR or
+`POST /chords/sheet-music/prod/process` for chord-only sheet music with a
+request `callback_url` whose host matches the configured `OMR_CALLBACK_URL` host.
+See
 [`api/security.md`](api/security.md) for the security configuration.
 
 Existing MusicXML retrieval remains unchanged:

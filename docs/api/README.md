@@ -29,6 +29,13 @@ stores `chord_assignments.json`. It runs HOMR visual geometry detection only and
 skips TrOMR/MusicXML generation, so its response does not include a MusicXML path
 and its alignment status is `visual_only`.
 
+`POST /chords/sheet-music/dev/process` and
+`POST /chords/sheet-music/prod/process` are the async chord-only sheet-music
+endpoints. They queue the same HOMR-geometry-only chord pipeline and return
+`202 Accepted`. Both require `X-OMR-API-Key`; the prod endpoint also requires a
+request `callback_url` whose host matches the configured `OMR_CALLBACK_URL`
+host.
+
 `POST /chords/chart/process` is the synchronous chord-chart endpoint for clean
 grid charts. It accepts the same raster image uploads, skips HOMR, detects chart
 rows/measures from barlines, parses chord symbols plus chart-flow symbols, returns
@@ -45,16 +52,19 @@ Async processing is exposed through explicit dev/prod endpoints:
 ```text
 POST /omr/dev/process
 POST /omr/prod/process
+POST /chords/sheet-music/dev/process
+POST /chords/sheet-music/prod/process
 POST /chords/chart/dev/process
 POST /chords/chart/prod/process
 ```
 
-Both async endpoints save the upload, queue the job, and return `202 Accepted`.
+All async endpoints save the upload, queue the job, and return `202 Accepted`.
 Callers may poll the job-status endpoint, and callback delivery can be used for
 completion/failure events.
 
 In production, Spring Boot should use the prod endpoint for the selected source
-type: `POST /omr/prod/process` for OMR/sheet-music processing or
+type: `POST /omr/prod/process` for full OMR/sheet-music processing,
+`POST /chords/sheet-music/prod/process` for chord-only sheet music, or
 `POST /chords/chart/prod/process` for chart processing. Prod endpoints require
 API keys and a request `callback_url` whose host matches the configured
 `OMR_CALLBACK_URL` host. See
@@ -99,6 +109,8 @@ POST /omr/process              # legacy sync
 POST /omr/dev/process          # async, request callback allowed
 POST /omr/prod/process         # async, domain-validated callback required
 POST /chords/sheet-music/process
+POST /chords/sheet-music/dev/process
+POST /chords/sheet-music/prod/process
 POST /chords/chart/process
 POST /chords/chart/dev/process
 POST /chords/chart/prod/process

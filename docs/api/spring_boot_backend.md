@@ -32,7 +32,7 @@ Form fields:
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `file` | yes | `.png`, `.jpg`, or `.jpeg` only |
+| `file` | yes | `.png`, `.jpg`, `.jpeg`, or `.webp` only |
 | `job_id` | no | If supplied, use only letters, numbers, `_`, `-`; max 128 chars |
 | `callback_url` | no | Absolute `http` or `https` URL; if omitted, poll the status endpoint |
 
@@ -80,7 +80,7 @@ Form fields:
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `file` | yes | `.png`, `.jpg`, or `.jpeg` only |
+| `file` | yes | `.png`, `.jpg`, `.jpeg`, or `.webp` only |
 | `job_id` | no | If supplied, use only letters, numbers, `_`, `-`; max 128 chars |
 | `callback_url` | yes | Absolute `http` or `https` URL; host must match configured `OMR_CALLBACK_URL` host |
 
@@ -452,7 +452,7 @@ Example unsupported-file response:
 
 ```json
 {
-  "detail": "Unsupported file extension. Allowed extensions: .jpeg, .jpg, .png"
+  "detail": "Unsupported file extension. Allowed extensions: .jpeg, .jpg, .png, .webp"
 }
 ```
 

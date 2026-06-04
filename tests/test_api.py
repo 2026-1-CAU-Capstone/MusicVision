@@ -261,7 +261,7 @@ def test_process_sheet_music_chords_returns_assignments(
     response = client.post(
         "/chords/sheet-music/process",
         data={"job_id": "chord-only-job"},
-        files={"file": ("score.png", BytesIO(b"fake-image"), "image/png")},
+        files={"file": ("score.webp", BytesIO(b"fake-image"), "image/webp")},
     )
 
     assert response.status_code == 200
@@ -301,7 +301,7 @@ def test_process_sheet_music_chords_rejects_unsupported_extensions(
 
     assert response.status_code == 400
     assert response.json() == {
-        "detail": "Unsupported file extension. Allowed extensions: .jpeg, .jpg, .png"
+        "detail": "Unsupported file extension. Allowed extensions: .jpeg, .jpg, .png, .webp"
     }
 
 
@@ -379,7 +379,7 @@ def test_process_chord_chart_returns_chart(
     response = client.post(
         "/chords/chart/process",
         data={"job_id": "chart-job"},
-        files={"file": ("chart.png", BytesIO(b"fake-image"), "image/png")},
+        files={"file": ("chart.webp", BytesIO(b"fake-image"), "image/webp")},
     )
 
     assert response.status_code == 200
@@ -454,7 +454,7 @@ def test_process_omr_rejects_unsupported_extensions(client: TestClient) -> None:
 
     assert response.status_code == 400
     assert response.json() == {
-        "detail": "Unsupported file extension. Allowed extensions: .jpeg, .jpg, .png"
+        "detail": "Unsupported file extension. Allowed extensions: .jpeg, .jpg, .png, .webp"
     }
 
 

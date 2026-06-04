@@ -21,12 +21,14 @@ All chart processing endpoints accept raster uploads:
 .png
 .jpg
 .jpeg
+.webp
 ```
 
 ## Pipeline
 
 ```text
 upload
+  -> preprocess image
   -> load image
   -> OCR chart text
   -> detect chart rows and measure cells from barlines

@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -6,7 +7,7 @@ from pipeline.chord_charts.ocr_backend import (
     extract_chart_ocr_tokens,
 )
 from pipeline.chord_charts.overlay import write_chord_chart_overlay
-from pipeline.chord_charts.parser import detect_chart_grid, parse_chord_chart_image
+from pipeline.chord_charts.parser import ChartRow, detect_chart_grid, parse_chord_chart_image
 from pipeline.chords.easyocr_backend import extract_chord_tokens_ocr
 from pipeline.chords.measure_assignment import assign_chords_to_measures
 from pipeline.chords.ocr_common import load_rgb_image
@@ -28,6 +29,12 @@ from pipeline.sheet_music_structure import (
     clean_single_staff_redundant_clefs,
     detect_ending_markers,
 )
+
+
+ProgressCallback = Callable[
+    [int, str, str | None, int | None, int | None],
+    None,
+]
 
 
 @dataclass(frozen=True)
@@ -238,17 +245,60 @@ def run_chord_chart_pipeline(
     intermediate_dir: Path,
     output_dir: Path,
     logs_dir: Path,
+    progress_callback: ProgressCallback | None = None,
 ) -> ChordChartPipelineResult:
     del logs_dir
 
+    _report_progress(
+        progress_callback,
+        progress=8,
+        stage="preprocessing",
+        message="Preprocessing chord chart image",
+    )
     preprocessed_input_path = preprocess_input(
         input_file_path=input_file_path,
         intermediate_dir=intermediate_dir,
     )
+    _report_progress(
+        progress_callback,
+        progress=12,
+        stage="loading_image",
+        message="Loading preprocessed chord chart image",
+    )
     image = load_rgb_image(preprocessed_input_path)
+    _report_progress(
+        progress_callback,
+        progress=20,
+        stage="detecting_grid",
+        message="Detecting chord chart grid",
+    )
     rows = detect_chart_grid(image)
+    _report_progress(
+        progress_callback,
+        progress=32,
+        stage="page_ocr",
+        message="Reading chart page text",
+    )
     page_tokens, page_rejects = extract_chart_ocr_tokens(image)
-    cell_tokens, cell_rejects = extract_chart_cell_ocr_tokens(image, rows)
+    _report_progress(
+        progress_callback,
+        progress=45,
+        stage="cell_ocr",
+        message="Reading chart cells",
+        current_step=0,
+        total_steps=_estimate_chart_cell_ocr_steps(rows),
+    )
+    cell_tokens, cell_rejects = extract_chart_cell_ocr_tokens(
+        image,
+        rows,
+        progress_callback=_chart_cell_ocr_progress_callback(progress_callback),
+    )
+    _report_progress(
+        progress_callback,
+        progress=82,
+        stage="parsing",
+        message="Parsing chord chart symbols",
+    )
     result_payload = parse_chord_chart_image(
         image=image,
         tokens=[*page_tokens, *cell_tokens],
@@ -257,18 +307,71 @@ def run_chord_chart_pipeline(
         source_file=input_file_path.name,
         rows=rows,
     )
+    _report_progress(
+        progress_callback,
+        progress=92,
+        stage="overlay",
+        message="Writing chord chart overlay",
+    )
     overlay_path = write_chord_chart_overlay(
         image=image,
         pages=result_payload["pages"],
         output_dir=output_dir,
     )
     result_payload["overlay_file"] = overlay_path.name
+    _report_progress(
+        progress_callback,
+        progress=97,
+        stage="exporting",
+        message="Writing chord chart output",
+    )
     chord_chart_path = export_chord_chart_json(
         result_payload=result_payload,
         output_dir=output_dir,
     )
 
     return ChordChartPipelineResult(chord_chart_path=chord_chart_path)
+
+
+def _report_progress(
+    progress_callback: ProgressCallback | None,
+    *,
+    progress: int,
+    stage: str,
+    message: str | None,
+    current_step: int | None = None,
+    total_steps: int | None = None,
+) -> None:
+    if progress_callback is None:
+        return
+
+    progress_callback(progress, stage, message, current_step, total_steps)
+
+
+def _chart_cell_ocr_progress_callback(
+    progress_callback: ProgressCallback | None,
+) -> Callable[[int, int], None] | None:
+    if progress_callback is None:
+        return None
+
+    def report_cell_progress(completed_steps: int, total_steps: int) -> None:
+        progress = 45
+        if total_steps > 0:
+            progress = 45 + int((completed_steps / total_steps) * 35)
+        _report_progress(
+            progress_callback,
+            progress=min(80, progress),
+            stage="cell_ocr",
+            message=f"Reading chart cells ({completed_steps}/{total_steps})",
+            current_step=completed_steps,
+            total_steps=total_steps,
+        )
+
+    return report_cell_progress
+
+
+def _estimate_chart_cell_ocr_steps(rows: list[ChartRow]) -> int:
+    return sum(max(0, len(row.boundaries) - 1) * 6 for row in rows)
 
 
 def _postprocess_sheet_music_chord_output(

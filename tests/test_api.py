@@ -725,6 +725,7 @@ def test_prod_process_chord_chart_uses_domain_validated_request_callback(
         intermediate_dir: Path,
         output_dir: Path,
         logs_dir: Path,
+        progress_callback: object | None = None,
     ) -> omr_service.ChordChartPipelineResult:
         chord_chart_path = output_dir / "chord_chart.json"
         chord_chart_path.write_text('{"source_type":"chord_chart"}', encoding="utf-8")
@@ -776,6 +777,19 @@ def test_prod_process_chord_chart_uses_domain_validated_request_callback(
             },
         )
     ]
+    completed = client.get(
+        "/omr/jobs/callback-chart-job",
+        headers={"X-OMR-API-Key": "omr-secret"},
+    )
+    assert completed.status_code == 200
+    assert completed.json() == {
+        "job_id": "callback-chart-job",
+        "status": "completed",
+        "message": "Chord chart processing completed",
+        "progress": 100,
+        "stage": "completed",
+        "chord_chart_path": "jobs/callback-chart-job/output/chord_chart.json",
+    }
 
 
 def test_omr_api_key_is_required_when_configured(
@@ -829,6 +843,47 @@ def test_callback_api_key_header_is_sent(
 
     assert callback_error is None
     assert captured_headers["X-omr-callback-api-key"] == "callback-secret"
+
+
+def test_terminal_callback_omits_polling_progress_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    callbacks: list[tuple[str, dict[str, object]]] = []
+
+    def fake_post_job_callback(
+        callback_url: str,
+        payload: dict[str, object],
+    ) -> None:
+        callbacks.append((callback_url, payload))
+
+    monkeypatch.setattr(omr_endpoint, "_post_job_callback", fake_post_job_callback)
+
+    omr_endpoint._send_job_callback(
+        "progress-job",
+        "https://backend.example/omr-callbacks",
+        {
+            "job_id": "progress-job",
+            "status": "completed",
+            "message": "Chord chart processing completed",
+            "progress": 100,
+            "stage": "completed",
+            "current_step": 4,
+            "total_steps": 4,
+            "chord_chart_path": "jobs/progress-job/output/chord_chart.json",
+        },
+    )
+
+    assert callbacks == [
+        (
+            "https://backend.example/omr-callbacks",
+            {
+                "job_id": "progress-job",
+                "status": "completed",
+                "message": "Chord chart processing completed",
+                "chord_chart_path": "jobs/progress-job/output/chord_chart.json",
+            },
+        )
+    ]
 
 
 def test_dev_process_omr_records_failed_background_job(
@@ -889,8 +944,18 @@ def test_dev_process_omr_records_failed_background_job(
 def test_job_status_reports_processing_and_missing(client: TestClient, tmp_path) -> None:
     processing_job_dir = tmp_path / "jobs" / "pending-job"
     processing_job_dir.mkdir(parents=True)
+    omr_endpoint.write_job_status(
+        "progress-job",
+        status="processing",
+        message="Reading chart cells",
+        progress=62,
+        stage="cell_ocr",
+        current_step=12,
+        total_steps=30,
+    )
 
     processing = client.get("/omr/jobs/pending-job")
+    progress = client.get("/omr/jobs/progress-job")
     missing = client.get("/omr/jobs/missing-job")
 
     assert processing.status_code == 200
@@ -898,6 +963,16 @@ def test_job_status_reports_processing_and_missing(client: TestClient, tmp_path)
         "job_id": "pending-job",
         "status": "processing",
         "message": "OMR processing in progress",
+    }
+    assert progress.status_code == 200
+    assert progress.json() == {
+        "job_id": "progress-job",
+        "status": "processing",
+        "message": "Reading chart cells",
+        "progress": 62,
+        "stage": "cell_ocr",
+        "current_step": 12,
+        "total_steps": 30,
     }
     assert missing.status_code == 200
     assert missing.json() == {"job_id": "missing-job", "status": "not_found"}

@@ -26,6 +26,8 @@ POST /omr/process
 POST /omr/dev/process
 POST /omr/prod/process
 POST /chords/sheet-music/process
+POST /chords/sheet-music/dev/process
+POST /chords/sheet-music/prod/process
 POST /chords/chart/process
 POST /chords/chart/dev/process
 POST /chords/chart/prod/process
@@ -38,7 +40,8 @@ GET  /omr/jobs/{job_id}/chord-chart
 `/health` remains unauthenticated so deployments can still perform simple health
 checks.
 
-`POST /omr/prod/process`, `POST /chords/chart/dev/process`, and
+`POST /omr/prod/process`, `POST /chords/sheet-music/dev/process`,
+`POST /chords/sheet-music/prod/process`, `POST /chords/chart/dev/process`, and
 `POST /chords/chart/prod/process` always fail closed if `OMR_API_KEY` is not
 configured. In `APP_ENV=prod`, the rest of the OMR API also fails closed when
 `OMR_API_KEY` is missing. In local development, leaving `OMR_API_KEY` empty keeps
@@ -63,6 +66,7 @@ Spring Boot should call:
 
 ```text
 POST /omr/prod/process
+POST /chords/sheet-music/prod/process
 POST /chords/chart/prod/process
 ```
 
@@ -83,8 +87,9 @@ Development can use request-supplied callback URLs:
 APP_ENV=dev
 ```
 
-In this mode, `POST /omr/dev/process` and `POST /chords/chart/dev/process` may
-include:
+In this mode, `POST /omr/dev/process`,
+`POST /chords/sheet-music/dev/process`, and
+`POST /chords/chart/dev/process` may include:
 
 ```text
 callback_url=http://localhost:8080/omr/callbacks
@@ -92,7 +97,8 @@ callback_url=http://localhost:8080/omr/callbacks
 
 If no request callback is supplied, the development async endpoint simply queues
 the job without a callback. Callers can still poll `GET /omr/jobs/{job_id}`.
-The chord-chart development endpoint still requires `X-OMR-API-Key`.
+The sheet-music chord and chord-chart development endpoints still require
+`X-OMR-API-Key`.
 
 `POST /omr/process` remains a legacy synchronous compatibility endpoint and does
 not use callback delivery.

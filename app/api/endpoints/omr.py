@@ -398,6 +398,58 @@ def process_chord_chart_prod(
 
 
 @router.post(
+    "/chords/sheet-music/dev/process",
+    response_model=OMRProcessQueuedResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[
+        Depends(log_process_request),
+        Depends(require_configured_omr_api_key),
+    ],
+)
+def process_sheet_music_chords_dev(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    job_id: str | None = Form(default=None),
+    callback_url: str | None = Form(default=None),
+) -> OMRProcessQueuedResponse:
+    safe_callback_url = _validate_callback_url(
+        callback_url,
+        error_detail="callback_url must be an absolute http(s) URL.",
+    )
+    return _queue_sheet_music_chord_job(
+        background_tasks=background_tasks,
+        file=file,
+        job_id=job_id,
+        callback_url=safe_callback_url,
+    )
+
+
+@router.post(
+    "/chords/sheet-music/prod/process",
+    response_model=OMRProcessQueuedResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[
+        Depends(log_process_request),
+        Depends(require_configured_omr_api_key),
+    ],
+)
+def process_sheet_music_chords_prod(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    job_id: str | None = Form(default=None),
+    callback_url: str | None = Form(default=None),
+) -> OMRProcessQueuedResponse:
+    return _queue_sheet_music_chord_job(
+        background_tasks=background_tasks,
+        file=file,
+        job_id=job_id,
+        callback_url=_resolve_prod_callback_url(callback_url),
+    )
+
+
+@router.post(
     "/omr/prod/process",
     response_model=OMRProcessQueuedResponse,
     response_model_exclude_none=True,
@@ -494,6 +546,44 @@ def _queue_chord_chart_job(
         job_id=safe_job_id,
         status="queued",
         message="Chord chart processing queued",
+    )
+
+
+def _queue_sheet_music_chord_job(
+    *,
+    background_tasks: BackgroundTasks,
+    file: UploadFile,
+    job_id: str | None,
+    callback_url: str | None,
+) -> OMRProcessQueuedResponse:
+    safe_job_id, input_file_path, job_paths = _save_omr_upload(
+        file=file,
+        job_id=job_id,
+        callback_url=callback_url,
+    )
+
+    write_job_status(
+        safe_job_id,
+        status="queued",
+        message="Sheet music chord processing queued",
+        progress=0,
+        stage="queued",
+        callback_url=callback_url,
+    )
+    background_tasks.add_task(
+        _run_sheet_music_chord_job,
+        job_id=safe_job_id,
+        input_file_path=input_file_path,
+        intermediate_dir=job_paths.intermediate_dir,
+        output_dir=job_paths.output_dir,
+        logs_dir=job_paths.logs_dir,
+        callback_url=callback_url,
+    )
+
+    return OMRProcessQueuedResponse(
+        job_id=safe_job_id,
+        status="queued",
+        message="Sheet music chord processing queued",
     )
 
 
@@ -782,6 +872,57 @@ def _run_chord_chart_job(
         progress=100,
         stage="completed",
         chord_chart_path=_relative_path(pipeline_result.chord_chart_path),
+        callback_url=callback_url,
+    )
+    _send_job_callback(job_id, callback_url, payload)
+
+
+def _run_sheet_music_chord_job(
+    *,
+    job_id: str,
+    input_file_path: Path,
+    intermediate_dir: Path,
+    output_dir: Path,
+    logs_dir: Path,
+    callback_url: str | None,
+) -> None:
+    write_job_status(
+        job_id,
+        status="processing",
+        message="Sheet music chord processing in progress",
+        progress=10,
+        stage="sheet_music_chord_processing",
+        callback_url=callback_url,
+    )
+
+    try:
+        pipeline_result = run_sheet_music_chord_pipeline(
+            job_id=job_id,
+            input_file_path=input_file_path,
+            intermediate_dir=intermediate_dir,
+            output_dir=output_dir,
+            logs_dir=logs_dir,
+        )
+    except Exception as exc:
+        logger.exception("Sheet music chord processing failed: job_id=%s", job_id)
+        error_message = str(exc) or exc.__class__.__name__
+        payload = write_job_status(
+            job_id,
+            status="failed",
+            message="Sheet music chord processing failed",
+            callback_url=callback_url,
+            error=error_message,
+        )
+        _send_job_callback(job_id, callback_url, payload)
+        return
+
+    payload = write_job_status(
+        job_id,
+        status="completed",
+        message="Sheet music chord processing completed",
+        progress=100,
+        stage="completed",
+        chord_assignments_path=_relative_path(pipeline_result.chord_assignments_path),
         callback_url=callback_url,
     )
     _send_job_callback(job_id, callback_url, payload)

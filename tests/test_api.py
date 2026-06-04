@@ -305,6 +305,144 @@ def test_process_sheet_music_chords_rejects_unsupported_extensions(
     }
 
 
+def test_dev_process_sheet_music_chords_requires_api_key_configuration(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(omr_endpoint, "OMR_API_KEY", None)
+
+    response = client.post(
+        "/chords/sheet-music/dev/process",
+        files={"file": ("score.png", BytesIO(b"fake-image"), "image/png")},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "OMR API key is not configured."}
+
+
+def test_prod_process_sheet_music_chords_rejects_untrusted_callback_host(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(omr_endpoint, "OMR_API_KEY", "omr-secret")
+    monkeypatch.setattr(
+        omr_endpoint,
+        "OMR_CALLBACK_URL",
+        "https://backend.example/fixed-omr-callback",
+    )
+
+    response = client.post(
+        "/chords/sheet-music/prod/process",
+        headers={"X-OMR-API-Key": "omr-secret"},
+        data={"callback_url": "https://other.example/sheet-callback"},
+        files={"file": ("score.png", BytesIO(b"fake-image"), "image/png")},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": (
+            "callback_url host is not allowed. "
+            "It must match the configured OMR_CALLBACK_URL host."
+        )
+    }
+
+
+def test_prod_process_sheet_music_chords_uses_domain_validated_request_callback(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    callbacks: list[tuple[str, dict[str, object]]] = []
+
+    def fake_run_sheet_music_chord_pipeline(
+        *,
+        job_id: str,
+        input_file_path: Path,
+        intermediate_dir: Path,
+        output_dir: Path,
+        logs_dir: Path,
+    ) -> omr_service.SheetMusicChordPipelineResult:
+        chord_assignments_path = output_dir / "chord_assignments.json"
+        chord_assignments_path.write_text(
+            json.dumps(
+                {
+                    "job_id": job_id,
+                    "source_file": input_file_path.name,
+                    "source_type": "sheet_music",
+                    "pipeline": "homr_geometry_only",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return omr_service.SheetMusicChordPipelineResult(
+            chord_assignments_path=chord_assignments_path,
+        )
+
+    def fake_post_job_callback(
+        callback_url: str,
+        payload: dict[str, object],
+    ) -> None:
+        callbacks.append((callback_url, payload))
+
+    monkeypatch.setattr(omr_endpoint, "OMR_API_KEY", "omr-secret")
+    monkeypatch.setattr(
+        omr_endpoint,
+        "OMR_CALLBACK_URL",
+        "https://backend.example/fixed-omr-callback",
+    )
+    monkeypatch.setattr(
+        omr_endpoint,
+        "run_sheet_music_chord_pipeline",
+        fake_run_sheet_music_chord_pipeline,
+    )
+    monkeypatch.setattr(omr_endpoint, "_post_job_callback", fake_post_job_callback)
+
+    response = client.post(
+        "/chords/sheet-music/prod/process",
+        headers={"X-OMR-API-Key": "omr-secret"},
+        data={
+            "job_id": "callback-sheet-chord-job",
+            "callback_url": "https://backend.example/sheet-callback",
+        },
+        files={"file": ("score.png", BytesIO(b"fake-image"), "image/png")},
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "job_id": "callback-sheet-chord-job",
+        "status": "queued",
+        "message": "Sheet music chord processing queued",
+    }
+    assert callbacks == [
+        (
+            "https://backend.example/sheet-callback",
+            {
+                "job_id": "callback-sheet-chord-job",
+                "status": "completed",
+                "message": "Sheet music chord processing completed",
+                "chord_assignments_path": (
+                    "jobs/callback-sheet-chord-job/output/chord_assignments.json"
+                ),
+            },
+        )
+    ]
+
+    completed = client.get(
+        "/omr/jobs/callback-sheet-chord-job",
+        headers={"X-OMR-API-Key": "omr-secret"},
+    )
+    assert completed.status_code == 200
+    assert completed.json() == {
+        "job_id": "callback-sheet-chord-job",
+        "status": "completed",
+        "message": "Sheet music chord processing completed",
+        "progress": 100,
+        "stage": "completed",
+        "chord_assignments_path": (
+            "jobs/callback-sheet-chord-job/output/chord_assignments.json"
+        ),
+    }
+
+
 def test_process_chord_chart_returns_chart(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

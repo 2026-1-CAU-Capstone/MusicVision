@@ -183,6 +183,17 @@ Completed example:
 }
 ```
 
+Completed chord-chart example:
+
+```json
+{
+  "job_id": "demo-chart",
+  "status": "completed",
+  "message": "Chord chart processing completed",
+  "chord_chart_path": "jobs/demo-chart/output/chord_chart.json"
+}
+```
+
 Failed example:
 
 ```json
@@ -293,70 +304,125 @@ Representative payload:
 ```json
 {
   "job_id": "demo-chart",
+  "source_file": "cherokee_chord_chart.jpg",
   "source_type": "chord_chart",
+  "title": "Cherokee",
+  "composer": "Ray Noble",
+  "style": "Up Tempo Swing",
   "time_signature": {
-    "text_raw": "4/4",
     "numerator": 4,
     "denominator": 4
   },
+  "beats_per_bar": 4,
+  "measure_count": 36,
+  "chords": [
+    {
+      "kind": "chord",
+      "text": "Bb6",
+      "measure_index": 1,
+      "beat": 1,
+      "section": "A",
+      "source": "direct"
+    },
+    {
+      "kind": "chord",
+      "text": "%",
+      "measure_index": 2,
+      "beat": 1,
+      "section": "A",
+      "source": "repeat_previous_measure",
+      "derived_from_measure_index": 1
+    },
+    {
+      "kind": "chord",
+      "text": "G7b9",
+      "measure_index": 14,
+      "beat": 2,
+      "section": "A",
+      "source": "direct"
+    }
+  ],
   "flow": {
-    "repeat_groups": [],
-    "endings": [],
+    "sections": [
+      {
+        "section": "A",
+        "start_measure_index": 1,
+        "end_measure_index": 20
+      },
+      {
+        "section": "B",
+        "start_measure_index": 21,
+        "end_measure_index": 36
+      }
+    ],
+    "repeat_groups": [
+      {
+        "start_measure_index": 1,
+        "end_measure_index": 16,
+        "section": "A"
+      }
+    ],
+    "endings": [
+      {
+        "number": 1,
+        "start_measure_index": 13,
+        "end_measure_index": 16,
+        "section": "A"
+      },
+      {
+        "number": 2,
+        "start_measure_index": 17,
+        "end_measure_index": 20,
+        "section": "A"
+      }
+    ],
     "navigation": [
       {
+        "type": "fine",
+        "measure_index": 20,
+        "section": "A",
+        "text": "Fine"
+      },
+      {
         "type": "dc_al_ending",
-        "text_raw": "D.C. al 2nd ending",
-        "target_ending": 2
+        "measure_index": 36,
+        "section": "B",
+        "target_ending": 2,
+        "text": "D.C. al 2nd ending"
       }
     ]
   },
-  "pages": [
-    {
-      "page": 1,
-      "assignment_source": "chart_grid_detection",
-      "systems": [
-        {
-          "index": 1,
-          "section": "A",
-          "measures": [
-            {
-              "index": 1,
-              "left_boundary": { "kind": "start_repeat" },
-              "right_boundary": { "kind": "single" },
-              "chords": [
-                {
-                  "text_raw": "Ab-7b5",
-                  "text_norm": "Abm7b5",
-                  "beat": 1
-                }
-              ],
-              "symbols": []
-            }
-          ]
-        }
-      ]
-    }
-  ]
+  "warnings": []
 }
 ```
+
+`chord_chart.json` is intentionally slim. It does not include OCR boxes,
+component splits, parser internals, or page/system/measure debug structure. Those
+details are written to `chord_chart_debug.json` for MusicVision-side debugging
+and are not part of the Spring Boot contract.
 
 ## 3. Recommended backend flows
 
 ### Development flow
 
 1. Receive the uploaded image from the frontend or a local test client.
-2. Send it to `POST /omr/dev/process` with:
+2. Send it to the selected development endpoint:
+   - `POST /omr/dev/process` for full OMR
+   - `POST /chords/sheet-music/dev/process` for chord-only sheet music
+   - `POST /chords/chart/dev/process` for chord charts
+3. Include:
    - `file`
    - optional `job_id`
    - optional `callback_url`
    - `X-OMR-API-Key` when MusicVision has `OMR_API_KEY` configured
-3. Store the returned `job_id` and mark the backend job as queued.
-4. If `callback_url` was supplied, wait for the MusicVision callback.
-5. If no `callback_url` was supplied, poll `GET /omr/jobs/{job_id}` until it reports `completed` or `failed`.
-6. When completed, fetch:
-   - `/musicxml`
-   - `/chord-assignments`
-7. Apply the alignment handling below before joining chords to MusicXML.
+4. Store the returned `job_id` and mark the backend job as queued.
+5. If `callback_url` was supplied, wait for the MusicVision callback.
+6. If no `callback_url` was supplied, poll `GET /omr/jobs/{job_id}` until it reports `completed` or `failed`.
+7. When completed, fetch the artifact for the selected source type:
+   - full OMR: `/musicxml` and `/chord-assignments`
+   - chord-only sheet music: `/chord-assignments`
+   - chord chart: `/chord-chart`
+8. Apply the alignment handling below only for sheet-music chord assignments.
 
 ### Production flow
 
@@ -367,18 +433,19 @@ Representative payload:
    `POST /chords/chart/prod/process` for chord charts.
 3. Store the returned `job_id` and mark the backend job as queued.
 4. Wait for the MusicVision callback, or poll `GET /omr/jobs/{job_id}` until it reports `completed` or `failed`.
-5. When completed, fetch:
-   - `/musicxml`
-   - `/chord-assignments`
-6. Check:
+5. When completed, fetch the artifact for the selected source type:
+   - full OMR: `/musicxml` and `/chord-assignments`
+   - chord-only sheet music: `/chord-assignments`
+   - chord chart: `/chord-chart`
+6. For sheet-music chord assignments, check:
    ```json
    "measure_alignment.status"
    ```
-7. Join chord assignments to MusicXML for measures that have:
+7. For full OMR, join chord assignments to MusicXML for measures that have:
    ```json
    "musicxml_measure_number"
    ```
-8. Persist or transform the combined result for the frontend.
+8. For chord charts, persist or transform `chord_chart.json` directly for the frontend.
 
 Recommended handling:
 
@@ -440,7 +507,8 @@ Returns:
   "status": "completed",
   "message": "OMR processing completed",
   "musicxml_path": "jobs/demo-job/output/score.musicxml",
-  "chord_assignments_path": "jobs/demo-job/output/chord_assignments.json"
+  "chord_assignments_path": "jobs/demo-job/output/chord_assignments.json",
+  "chord_chart_path": null
 }
 ```
 
@@ -473,7 +541,8 @@ preprocessing
 loading_image
 detecting_grid
 page_ocr
-cell_ocr
+row_ocr
+selective_cell_ocr
 parsing
 overlay
 exporting
@@ -506,6 +575,7 @@ include `callback_error` for diagnostics.
 | missing callback host config for production async | `503` |
 | missing MusicXML | `404` |
 | missing chord assignments | `404` |
+| missing chord chart | `404` |
 | invalid `job_id` | `400` |
 
 Example unsupported-file response:

@@ -41,6 +41,74 @@ The run printed EasyOCR's CPU warning:
 Using CPU. Note: This module is much faster with a GPU.
 ```
 
+## 2026-06-05 Cherokee OCR-region benchmark
+
+Input:
+
+```text
+resources/chord_charts/cherokee_chord_chart.jpg
+```
+
+Environment:
+
+- local Windows development machine
+- project virtualenv
+- CPU execution
+- no GPU accelerator detected
+- single-page raster input
+- benchmark variants reused the existing chart grid parser and EasyOCR settings
+
+Saved benchmark jobs:
+
+```text
+storage/jobs/chart-debug-cherokee-20260605-141920
+storage/jobs/chart-debug-cherokee-page-only-20260605
+storage/jobs/chart-debug-cherokee-full-cell-only-20260605-150749
+storage/jobs/chart-debug-cherokee-row-system-20260605-151641
+storage/jobs/chart-debug-cherokee-selective-20260605-163035
+storage/jobs/chart-debug-cherokee-selective-crops-20260605-183210
+```
+
+| Variant | OCR calls after grid detection | Elapsed time | Detected measures | Chords | Non-empty chord matches vs full baseline |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Current full chart pipeline | `1 page + 216 cell` | `405.47s` | `36` | `26` | baseline |
+| Page OCR only | `1 page` | `39.85s` | `36` | `26` | `15/26` |
+| Page OCR + full-cell only | `1 page + 36 cell` | `108.67s` | `36` | `26` | `17/26` |
+| Page OCR + row/system OCR | `1 page + 9 row` | `77.85s` | `36` | `27` | `18/26` |
+| Page + row/system + generic selective cell fallback | `1 page + 9 row + 45 targeted cell` | `152.07s` | `36` | `27` | `23/26` |
+| Page + row/system + chord-aware selective cell fallback | `1 page + 9 row + 45 targeted cell` | `129.15s` | `36` | `27` | `24/26` |
+
+The row/system OCR variant scans one crop per detected chart row instead of one
+or more crops per measure. On Cherokee it was about `5.2x` faster than the
+current six-region cell OCR pipeline and slightly outperformed full-cell-only
+for chord matches, but it still missed or simplified some suffixes and
+accidentals. Examples included `Bb6 -> Bb`, `G7b9 -> G7`, and `C#m7 -> C7`.
+It also introduced one extra chord assignment in measure 22.
+
+This suggests row/system OCR is a useful optimization direction, but it should
+probably be paired with selective targeted fallback for uncertain or low-detail
+measures rather than replacing cell OCR outright.
+
+The first selective fallback implementation does that pairing. It runs page OCR,
+row/system OCR, marks suspicious measures with explainable rules, then runs only
+targeted cell crops for those measures. The initial generic fallback used
+`full`, `right`, and `low` crops. A follow-up chord-aware fallback used
+`root`, `root_accidental`, and `suffix_lower_right` crops instead. On Cherokee,
+the chord-aware fallback selected 15 of 36 measures and reduced the current
+pipeline's 216 cell/subcell calls to 45 targeted cell calls. It recovered several
+details that page/row OCR missed, including `Bb6`, `Fm7`, `G7b9`, `F7#5`, and
+`Amaj7`, while keeping runtime around `3.1x` faster than the current full
+six-region run.
+
+The old full six-region output should not be treated as perfect ground truth.
+For example, the selective run emits `Bb6` in measure 19 and `F7` in measure 22,
+which appear visually plausible even though they differ from the saved full-pass
+baseline. Known remaining Cherokee issues include measure 21 `C7` instead of
+`C#m7`, and duplicate navigation tokens near the final `D.C. al 2nd ending`.
+The `slash_bass_below_root` crop was tested separately, but it picked up
+navigation text in later measures, so slash-bass fallback should be conditional
+rather than part of the default suspicious-measure crop set.
+
 ## Notes
 
 The current chart parser runs EasyOCR over the full page and over multiple

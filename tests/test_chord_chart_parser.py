@@ -59,6 +59,9 @@ def test_chord_chart_parser_handles_grid_symbols_and_flow() -> None:
     assert payload["flow"]["repeat_groups"] == [
         {"start_measure_index": 1, "end_measure_index": 4, "section": "A"}
     ]
+    assert payload["flow"]["sections"] == [
+        {"section": "A", "start_measure_index": 1, "end_measure_index": 8}
+    ]
     assert payload["flow"]["endings"] == [
         {
             "number": 1,
@@ -69,6 +72,52 @@ def test_chord_chart_parser_handles_grid_symbols_and_flow() -> None:
     ]
     assert payload["flow"]["navigation"][0]["type"] == "fine"
     assert payload["chart_ocr"]["detected_symbols"][-1]["type"] == "dc_al_ending"
+
+
+def test_chord_chart_parser_deduplicates_navigation_across_ocr_passes() -> None:
+    image = np.full((260, 360, 3), 255, dtype=np.uint8)
+    rows = [
+        ChartRow(
+            index=1,
+            y_top=100,
+            y_bottom=200,
+            boundaries=[
+                Boundary(50, 100, 200, 1),
+                Boundary(310, 100, 200, 1),
+            ],
+        )
+    ]
+    tokens = [
+        OCRToken("Fine", (200, 202, 275, 230), 0.92, source="page_ocr"),
+        OCRToken(
+            "Fine",
+            (202, 203, 274, 229),
+            0.99,
+            source="cell_ocr_row_system",
+            row_index=1,
+            region="row_system",
+        ),
+    ]
+
+    payload = parse_chord_chart_image(
+        image=image,
+        tokens=tokens,
+        ocr_rejects=[],
+        job_id="chart-job",
+        source_file="chart.png",
+        rows=rows,
+    )
+
+    measure = payload["pages"][0]["systems"][0]["measures"][0]
+    assert [navigation["type"] for navigation in measure["navigation"]] == ["fine"]
+    assert [navigation["type"] for navigation in payload["flow"]["navigation"]] == [
+        "fine"
+    ]
+    assert [
+        symbol["type"]
+        for symbol in payload["chart_ocr"]["detected_symbols"]
+        if symbol["type"] == "fine"
+    ] == ["fine"]
 
 
 def test_chord_chart_parser_recovers_fragmented_quality_and_stacked_bass() -> None:
@@ -180,3 +229,125 @@ def test_chord_chart_parser_does_not_promote_dc_al_fragment_to_chord() -> None:
     measure = payload["pages"][0]["systems"][0]["measures"][0]
     assert measure["navigation"][0]["type"] == "dc"
     assert measure["chords"] == []
+
+
+def test_chord_chart_parser_does_not_let_weak_accidental_override_stronger_chord() -> None:
+    image = np.full((260, 360, 3), 255, dtype=np.uint8)
+    rows = [
+        ChartRow(
+            index=1,
+            y_top=100,
+            y_bottom=200,
+            boundaries=[
+                Boundary(50, 100, 200, 1),
+                Boundary(310, 100, 200, 1),
+            ],
+        )
+    ]
+    tokens = [
+        OCRToken("An7", (70, 118, 150, 170), 0.48, source="page_ocr"),
+        OCRToken("Ac7", (72, 118, 152, 170), 0.93, source="cell_ocr_targeted"),
+    ]
+
+    payload = parse_chord_chart_image(
+        image=image,
+        tokens=tokens,
+        ocr_rejects=[],
+        job_id="chart-job",
+        source_file="chart.png",
+        rows=rows,
+    )
+
+    measure = payload["pages"][0]["systems"][0]["measures"][0]
+    assert measure["chords"][0]["text_norm"] == "Amaj7"
+
+
+def test_chord_chart_parser_attaches_numeric_flat_suffix_fragment() -> None:
+    image = np.full((260, 360, 3), 255, dtype=np.uint8)
+    rows = [
+        ChartRow(
+            index=1,
+            y_top=100,
+            y_bottom=200,
+            boundaries=[
+                Boundary(50, 100, 200, 1),
+                Boundary(310, 100, 200, 1),
+            ],
+        )
+    ]
+    tokens = [
+        OCRToken(
+            "67",
+            (70, 118, 145, 170),
+            0.48,
+            source="cell_ocr_targeted",
+            row_index=1,
+            col_index=1,
+            measure_index=1,
+            region="root",
+        ),
+        OCRToken(
+            "769",
+            (145, 135, 220, 170),
+            0.45,
+            source="cell_ocr_targeted",
+            row_index=1,
+            col_index=1,
+            measure_index=1,
+            region="suffix_lower_right",
+        ),
+    ]
+
+    payload = parse_chord_chart_image(
+        image=image,
+        tokens=tokens,
+        ocr_rejects=[],
+        job_id="chart-job",
+        source_file="chart.png",
+        rows=rows,
+    )
+
+    measure = payload["pages"][0]["systems"][0]["measures"][0]
+    assert measure["chords"][0]["text_norm"] == "G7b9"
+    assert measure["chords"][0]["context_fragments"][0]["reason"] == (
+        "numeric_6_as_flat_suffix"
+    )
+
+
+def test_parser_preserves_altered_chord_from_assembled_semantic_token() -> None:
+    image = np.full((220, 320, 3), 255, dtype=np.uint8)
+    rows = [
+        ChartRow(
+            index=1,
+            y_top=100,
+            y_bottom=180,
+            boundaries=[
+                Boundary(60, 100, 180, 1),
+                Boundary(260, 100, 180, 1),
+            ],
+        )
+    ]
+    tokens = [
+        OCRToken(
+            "G7b9",
+            (90, 118, 190, 170),
+            0.55,
+            source="cell_ocr_semantic_assembled",
+            row_index=1,
+            col_index=1,
+            measure_index=1,
+            region="semantic_chord",
+        )
+    ]
+
+    payload = parse_chord_chart_image(
+        image=image,
+        tokens=tokens,
+        ocr_rejects=[],
+        job_id="chart-job",
+        source_file="chart.png",
+        rows=rows,
+    )
+
+    measure = payload["pages"][0]["systems"][0]["measures"][0]
+    assert measure["chords"][0]["text_norm"] == "G7b9"

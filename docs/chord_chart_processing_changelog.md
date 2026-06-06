@@ -13,6 +13,123 @@ MusicXML, and has to understand chart-flow notation as well as chord symbols.
 - `docs/chord_chart_processing_changelog.md` tracks this chord-chart branch.
 - `docs/chord_chart_processing_performance.md` tracks local runtime measurements.
 
+## 2026-06-06 - Public chart contract and semantic crop OCR
+
+### Public contract split
+
+The chart export now separates the consumer contract from internal diagnostics:
+
+```text
+chord_chart.json        # public Spring Boot/frontend payload
+chord_chart_debug.json  # MusicVision OCR/parser diagnostics
+```
+
+`chord_chart.json` is intentionally slim. It contains the final chart metadata,
+final chord events, section/repeat/ending/navigation flow, and warnings. It no
+longer exposes the parser's page/system/measure tree, OCR evidence, bounding
+boxes, raw/corrected fragments, or parsed chord components.
+
+The public chord event shape is:
+
+```json
+{
+  "kind": "chord",
+  "text": "G7b9",
+  "measure_index": 14,
+  "beat": 2,
+  "section": "A",
+  "source": "direct"
+}
+```
+
+Percent-repeat measures are returned as the written chart symbol:
+
+```json
+{
+  "kind": "chord",
+  "text": "%",
+  "measure_index": 2,
+  "beat": 1,
+  "section": "A",
+  "source": "repeat_previous_measure",
+  "derived_from_measure_index": 1
+}
+```
+
+This keeps the frontend display faithful to the chart while preserving the
+resolved source measure for backend logic.
+
+### Semantic crop OCR experiment
+
+The Cherokee chord chart exposed that whole-cell or row-level OCR could miss
+small suffixes and jazz-glyph details even when the measure grid was correct.
+The experimental semantic runner now scans dedicated chord subregions:
+
+- `root`
+- `root_accidental`
+- `suffix_lower_right`
+
+Region-specific allowlists narrow the OCR search space. Root OCR is restricted
+to uppercase `A` through `G`, and semantic assembly uses only the first detected
+root letter from the root crop. This repairs cases where the root crop includes
+visual spillover and OCR returns text such as `Ba`, `Be`, `BG`, or `Gl`.
+
+Suffix assembly now handles reusable OCR confusions observed in the chart:
+
+- split suffix fragments such as `7` plus `#5` become `7#5`
+- `745` repairs to `7#5`
+- `719` repairs to `7b9`
+- digit-only suffixes outside valid chord extensions are rejected
+- `77` may become `m7` when the crop visually contains a minor dash
+- triangle-like major-seventh marks read as `07` can become `maj7` when visual
+  evidence supports a triangle glyph
+
+The parser also preserves richer semantic chord results, so a detected
+alteration such as `G7b9` is not downgraded later by weaker OCR context.
+
+### Cherokee validation snapshot
+
+Latest reviewed run:
+
+```text
+storage/jobs/chart-debug-cherokee_chord_chart-semantic-crops-20260606-183151
+```
+
+The public output was reviewed against the Cherokee ground truth and marked
+correct. Representative recovered cases:
+
+```text
+Bb6
+G7b9
+F7#5
+C#m7
+F#7
+Bmaj7
+Gmaj7
+%
+```
+
+Runtime on local CPU:
+
+```text
+total:              123.88s
+page OCR:            34.83s
+semantic cell OCR:   88.70s
+semantic OCR calls: 108
+```
+
+Verification:
+
+```text
+.venv\Scripts\python.exe -m pytest tests\test_chord_chart_semantic_assembly.py tests\test_chord_chart_parser.py tests\test_chord_chart_ocr_backend.py
+25 passed
+```
+
+Updated API/contract docs:
+
+- `docs/chord_charts.md`
+- `docs/api/spring_boot_backend.md`
+
 ## 2026-06-02 - Initial chord-chart API design
 
 ### Starting point

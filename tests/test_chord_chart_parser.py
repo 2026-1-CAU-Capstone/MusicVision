@@ -312,3 +312,42 @@ def test_chord_chart_parser_attaches_numeric_flat_suffix_fragment() -> None:
     assert measure["chords"][0]["context_fragments"][0]["reason"] == (
         "numeric_6_as_flat_suffix"
     )
+
+
+def test_parser_preserves_altered_chord_from_assembled_semantic_token() -> None:
+    image = np.full((220, 320, 3), 255, dtype=np.uint8)
+    rows = [
+        ChartRow(
+            index=1,
+            y_top=100,
+            y_bottom=180,
+            boundaries=[
+                Boundary(60, 100, 180, 1),
+                Boundary(260, 100, 180, 1),
+            ],
+        )
+    ]
+    tokens = [
+        OCRToken(
+            "G7b9",
+            (90, 118, 190, 170),
+            0.55,
+            source="cell_ocr_semantic_assembled",
+            row_index=1,
+            col_index=1,
+            measure_index=1,
+            region="semantic_chord",
+        )
+    ]
+
+    payload = parse_chord_chart_image(
+        image=image,
+        tokens=tokens,
+        ocr_rejects=[],
+        job_id="chart-job",
+        source_file="chart.png",
+        rows=rows,
+    )
+
+    measure = payload["pages"][0]["systems"][0]["measures"][0]
+    assert measure["chords"][0]["text_norm"] == "G7b9"

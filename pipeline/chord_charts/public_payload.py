@@ -54,20 +54,19 @@ def _public_chords(measures: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 }
             )
 
-        for chord in measure.get("resolved_chords") or []:
-            text = chord.get("text_norm") or chord.get("text_raw")
-            if not text:
-                continue
+        resolved_chords = measure.get("resolved_chords") or []
+        if resolved_chords:
+            first_resolved = resolved_chords[0]
             payload = {
                 "kind": "chord",
-                "text": text,
+                "text": "%",
                 "measure_index": measure_index,
-                "beat": chord.get("beat"),
+                "beat": first_resolved.get("beat") or 1,
                 "section": section,
                 "source": "repeat_previous_measure",
             }
-            if chord.get("derived_from_measure_index") is not None:
-                payload["derived_from_measure_index"] = chord.get(
+            if first_resolved.get("derived_from_measure_index") is not None:
+                payload["derived_from_measure_index"] = first_resolved.get(
                     "derived_from_measure_index"
                 )
             chords.append(payload)

@@ -104,7 +104,7 @@ def test_public_chord_chart_payload_keeps_final_music_without_ocr_debug() -> Non
             },
             {
                 "kind": "chord",
-                "text": "C7",
+                "text": "%",
                 "measure_index": 2,
                 "beat": 1,
                 "section": "A",

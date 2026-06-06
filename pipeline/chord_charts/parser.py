@@ -1053,6 +1053,9 @@ def _apply_ocr_context_to_measure(measure: MeasureCell) -> None:
             continue
 
         accidental = components.get("accidental")
+        if components.get("alterations"):
+            continue
+
         best_confidence = float(best.get("confidence") or 0.0)
         for chord in context_chords:
             other = chord.get("components") or {}

@@ -10,6 +10,27 @@ from pipeline.chords.easyocr_backend import _get_reader
 from pipeline.chords.ocr_common import preprocess_for_ocr
 
 
+SEMANTIC_CHART_CELL_REGION_NAMES = (
+    "root",
+    "root_accidental",
+    "suffix_lower_right",
+)
+CHART_ROOT_OCR_ALLOWLIST = "ABCDEFG"
+CHART_ACCIDENTAL_OCR_ALLOWLIST = (
+    "b#vVhHpPnN6"
+    "\u266d\u266f\ue260\ue262\ue10d\ue10c"
+)
+CHART_SUFFIX_OCR_ALLOWLIST = (
+    "ABCDEFGabcdefgijlnorstuxmM0123456789#b()/+-_ "
+    "\u00b0\u00f8\u25b3\u2206\u0394\ue260\ue262\ue10d\ue10c"
+)
+CHART_SEMANTIC_REGION_ALLOWLISTS = {
+    "root": CHART_ROOT_OCR_ALLOWLIST,
+    "root_accidental": CHART_ACCIDENTAL_OCR_ALLOWLIST,
+    "suffix_lower_right": CHART_SUFFIX_OCR_ALLOWLIST,
+}
+
+
 @dataclass(frozen=True)
 class OCRToken:
     text: str
@@ -56,7 +77,7 @@ def extract_chart_ocr_tokens(
 ) -> tuple[list[OCRToken], list[dict[str, Any]]]:
     processed = preprocess_for_ocr(image, scale=ocr_scale)
     reader = _get_reader(gpu=gpu)
-    results = reader.readtext(processed, detail=1, paragraph=False)
+    results = _read_chart_text(reader, processed)
     inverse_scale = 1.0 / ocr_scale
 
     tokens: list[OCRToken] = []
@@ -107,6 +128,7 @@ def extract_chart_cell_ocr_tokens(
     ocr_scale: float = 2.0,
     measure_indices: set[int] | None = None,
     region_names: tuple[str, ...] | None = None,
+    region_allowlists: dict[str, str] | None = None,
     source: str = "cell_ocr",
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> tuple[list[OCRToken], list[dict[str, Any]]]:
@@ -168,7 +190,15 @@ def extract_chart_cell_ocr_tokens(
 
                 processed = preprocess_for_ocr(subcrop, scale=ocr_scale)
                 inverse_scale = 1.0 / ocr_scale
-                results = reader.readtext(processed, detail=1, paragraph=False)
+                results = _read_chart_text(
+                    reader,
+                    processed,
+                    allowlist=(
+                        region_allowlists.get(region_name)
+                        if region_allowlists is not None
+                        else None
+                    ),
+                )
 
                 for points, text, confidence in results:
                     raw_text = (text or "").strip()
@@ -245,7 +275,7 @@ def extract_chart_row_ocr_tokens(
         crop = image[y0:y1, x0:x1].copy()
         processed = preprocess_for_ocr(crop, scale=ocr_scale)
         inverse_scale = 1.0 / ocr_scale
-        results = reader.readtext(processed, detail=1, paragraph=False)
+        results = _read_chart_text(reader, processed)
 
         for points, text, confidence in results:
             raw_text = (text or "").strip()
@@ -295,6 +325,18 @@ def extract_chart_row_ocr_tokens(
 
     tokens.sort(key=lambda token: (token.bbox[1], token.bbox[0]))
     return tokens, rejects
+
+
+def _read_chart_text(
+    reader: Any,
+    image: np.ndarray,
+    *,
+    allowlist: str | None = None,
+) -> list[Any]:
+    kwargs: dict[str, Any] = {"detail": 1, "paragraph": False}
+    if allowlist is not None:
+        kwargs["allowlist"] = allowlist
+    return reader.readtext(image, **kwargs)
 
 
 def _count_cell_ocr_regions(
@@ -427,7 +469,7 @@ def _cell_ocr_regions() -> list[tuple[str, float, float, float, float]]:
         ("low", 0.0, 1.0, 0.55, 1.0),
         ("root", 0.0, 0.28, 0.05, 0.77),
         ("root_accidental", 0.16, 0.33, 0.0, 0.50),
-        ("suffix_lower_right", 0.18, 0.76, 0.34, 0.76),
+        ("suffix_lower_right", 0.20, 0.76, 0.34, 0.76),
         ("slash_bass_below_root", 0.0, 0.64, 0.54, 1.0),
     ]
 

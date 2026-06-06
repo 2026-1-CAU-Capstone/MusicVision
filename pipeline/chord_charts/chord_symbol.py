@@ -8,6 +8,7 @@ from typing import Any
 ROOT_RE = re.compile(r"^(?P<root>[A-Ga-g])(?P<accidental>[#b]?)")
 ALTERATION_RE = re.compile(r"[#b](?:5|9|11|13)")
 EXTENSION_RE = re.compile(r"(?<![#b])(?:6|7|9|11|13)")
+NUMERIC_FLAT_SUFFIX_RE = re.compile(r"^7[6](5|9|11|13)$")
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,14 @@ def parse_chord_symbol(text: str | None) -> ParsedChord | None:
 
 def looks_like_chord_symbol(text: str | None) -> bool:
     return parse_chord_symbol(text) is not None
+
+
+def repair_numeric_flat_suffix(text: str | None) -> str | None:
+    compact = re.sub(r"\s+", "", text or "").strip("[](){}|")
+    match = NUMERIC_FLAT_SUFFIX_RE.fullmatch(compact)
+    if match is None:
+        return None
+    return f"7b{match.group(1)}"
 
 
 def _compact_symbol(text: str) -> str:
@@ -192,7 +201,13 @@ def _repair_ocr_spellings(token: str) -> str:
     if rest_lower in {"7b1z", "7h3", "713"}:
         return f"{prefix}7b13"
 
+    numeric_flat_suffix = repair_numeric_flat_suffix(rest)
+    if numeric_flat_suffix is not None:
+        return f"{prefix}{numeric_flat_suffix}"
+
     repaired_rest = rest.replace("z", "7").replace("Z", "7")
+    if repaired_rest == "719":
+        return f"{prefix}7b9"
     repaired_rest = re.sub(r"7b1[37]", "7b13", repaired_rest)
     return f"{prefix}{repaired_rest}"
 

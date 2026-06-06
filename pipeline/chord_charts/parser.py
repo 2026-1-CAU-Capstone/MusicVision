@@ -7,7 +7,11 @@ from typing import Any
 import cv2
 import numpy as np
 
-from pipeline.chord_charts.chord_symbol import ParsedChord, parse_chord_symbol
+from pipeline.chord_charts.chord_symbol import (
+    ParsedChord,
+    parse_chord_symbol,
+    repair_numeric_flat_suffix,
+)
 from pipeline.chord_charts.ocr_backend import OCRToken
 from pipeline.chords.models import quantize_beat
 
@@ -62,7 +66,7 @@ def parse_chord_chart_image(
         raise ValueError("Could not detect chord-chart measure grid.")
 
     warnings: list[str] = []
-    has_cell_tokens = any(token.source == "cell_ocr" for token in tokens)
+    has_cell_tokens = any(token.source.startswith("cell_ocr") for token in tokens)
     time_signature = _extract_time_signature(tokens, rows)
     if time_signature is None:
         if _has_visible_time_signature_region(image, rows):
@@ -213,6 +217,7 @@ def parse_chord_chart_image(
             measure.ending_number = row.ending_number
         _remove_navigation_fragment_chords(measure)
         _apply_ocr_context_to_measure(measure)
+        _apply_numeric_alteration_fragments(measure)
         _infer_repeated_rootless_minor_chords(measure, beats_per_bar=beats_per_bar)
         _merge_slash_bass_symbols(measure)
         _merge_vertical_bass_chords(measure, image=image)
@@ -1045,9 +1050,14 @@ def _apply_ocr_context_to_measure(measure: MeasureCell) -> None:
             continue
 
         accidental = components.get("accidental")
+        best_confidence = float(best.get("confidence") or 0.0)
         for chord in context_chords:
             other = chord.get("components") or {}
-            if other.get("root") == root and other.get("accidental"):
+            if (
+                other.get("root") == root
+                and other.get("accidental")
+                and float(chord.get("confidence") or 0.0) >= best_confidence - 0.05
+            ):
                 accidental = other.get("accidental")
                 break
 
@@ -1087,6 +1097,66 @@ def _apply_ocr_context_to_measure(measure: MeasureCell) -> None:
             continue
 
         _rewrite_chord(best, root=root, accidental=accidental, body=body)
+
+
+def _apply_numeric_alteration_fragments(measure: MeasureCell) -> None:
+    if not measure.chords:
+        return
+
+    measure_width = measure.bbox[2] - measure.bbox[0]
+    max_suffix_distance = max(70.0, measure_width * 0.34)
+    left_tolerance = max(12.0, measure_width * 0.04)
+
+    for token in measure.ocr_tokens:
+        body = repair_numeric_flat_suffix(token.text)
+        if body is None:
+            continue
+
+        candidates: list[tuple[float, dict[str, Any]]] = []
+        for chord in measure.chords:
+            if _is_lower_bass_chord_candidate(chord, measure):
+                continue
+            components = chord.get("components") or {}
+            if not components.get("root"):
+                continue
+            if components.get("quality") in {
+                "minor",
+                "minor_major",
+                "diminished",
+                "half_diminished",
+            }:
+                continue
+
+            distance = token.cx - _bbox_center_x(chord.get("bbox"))
+            if -left_tolerance <= distance <= max_suffix_distance:
+                candidates.append((abs(distance), chord))
+
+        if not candidates:
+            continue
+
+        _distance, target = min(candidates, key=lambda item: item[0])
+        components = target.get("components") or {}
+        root = str(components.get("root") or "")
+        if not root:
+            continue
+
+        target.setdefault("context_fragments", []).append(
+            {
+                "text_raw": token.text,
+                "text_norm": body,
+                "bbox": [float(value) for value in token.bbox],
+                "confidence": token.confidence,
+                "source": token.source,
+                "region": token.region,
+                "reason": "numeric_6_as_flat_suffix",
+            }
+        )
+        _rewrite_chord(
+            target,
+            root=root,
+            accidental=components.get("accidental"),
+            body=body,
+        )
 
 
 def _infer_repeated_rootless_minor_chords(
@@ -1253,6 +1323,12 @@ def _rewrite_chord(
     if bass:
         text_norm = f"{text_norm}/{bass}"
 
+    parsed = parse_chord_symbol(text_norm)
+    if parsed is not None:
+        chord["text_norm"] = parsed.text_norm
+        chord["components"] = parsed.to_dict()["components"]
+        return
+
     chord["text_norm"] = text_norm
     chord["components"] = {
         "root": root,
@@ -1266,20 +1342,20 @@ def _rewrite_chord(
 
 def _chord_score(chord: dict[str, Any]) -> float:
     components = chord.get("components") or {}
-    score = float(chord.get("confidence") or 0.0)
-    score += len(str(chord.get("text_norm") or "")) * 0.25
+    score = float(chord.get("confidence") or 0.0) * 3.0
+    score += len(str(chord.get("text_norm") or "")) * 0.20
     if components.get("accidental"):
-        score += 1.5
+        score += 0.6
     if components.get("quality") not in {None, "major"}:
-        score += 1.0
+        score += 0.8
     if components.get("extensions"):
-        score += 1.0
+        score += 0.8
     if components.get("alterations"):
         score += 1.0
     if components.get("bass"):
         score += 1.2
     if "maj7" in str(chord.get("text_norm") or ""):
-        score += 1.2
+        score += 0.8
     return score
 
 

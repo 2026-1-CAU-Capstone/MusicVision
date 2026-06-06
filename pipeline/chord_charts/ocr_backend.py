@@ -16,6 +16,10 @@ class OCRToken:
     bbox: tuple[float, float, float, float]
     confidence: float | None = None
     source: str = "page_ocr"
+    row_index: int | None = None
+    col_index: int | None = None
+    measure_index: int | None = None
+    region: str | None = None
 
     @property
     def cx(self) -> float:
@@ -26,12 +30,21 @@ class OCRToken:
         return (self.bbox[1] + self.bbox[3]) / 2.0
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "text": self.text,
             "bbox": [float(value) for value in self.bbox],
             "confidence": self.confidence,
             "source": self.source,
         }
+        if self.row_index is not None:
+            payload["row_index"] = self.row_index
+        if self.col_index is not None:
+            payload["col_index"] = self.col_index
+        if self.measure_index is not None:
+            payload["measure_index"] = self.measure_index
+        if self.region is not None:
+            payload["region"] = self.region
+        return payload
 
 
 def extract_chart_ocr_tokens(
@@ -92,6 +105,9 @@ def extract_chart_cell_ocr_tokens(
     min_confidence: float = 0.05,
     gpu: bool = False,
     ocr_scale: float = 2.0,
+    measure_indices: set[int] | None = None,
+    region_names: tuple[str, ...] | None = None,
+    source: str = "cell_ocr",
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> tuple[list[OCRToken], list[dict[str, Any]]]:
     reader = _get_reader(gpu=gpu)
@@ -99,11 +115,21 @@ def extract_chart_cell_ocr_tokens(
     rejects: list[dict[str, Any]] = []
 
     row_list = list(rows)
-    total_regions = _count_cell_ocr_regions(row_list)
+    selected_regions = _selected_cell_ocr_regions(region_names)
+    total_regions = _count_cell_ocr_regions(
+        row_list,
+        measure_indices=measure_indices,
+        region_names=region_names,
+    )
     completed_regions = 0
+    measure_index = 1
     for row_position, row in enumerate(row_list):
         boundaries = getattr(row, "boundaries", [])
         for col_index, (left, right) in enumerate(zip(boundaries, boundaries[1:]), start=1):
+            if measure_indices is not None and measure_index not in measure_indices:
+                measure_index += 1
+                continue
+
             x0 = int(max(0, float(left.x) + 8))
             x1 = int(min(image.shape[1], float(right.x) - 8))
             next_y_top = (
@@ -114,16 +140,17 @@ def extract_chart_cell_ocr_tokens(
             y0 = int(max(0, float(row.y_top) - 35))
             y1 = int(min(image.shape[0], next_y_top - 8, float(row.y_bottom) + 80))
             if x1 <= x0 or y1 <= y0:
-                completed_regions += len(_cell_ocr_regions())
+                completed_regions += len(selected_regions)
                 _report_cell_ocr_progress(
                     progress_callback,
                     completed=completed_regions,
                     total=total_regions,
                 )
+                measure_index += 1
                 continue
 
             crop = image[y0:y1, x0:x1].copy()
-            for region_name, xa, xb, ya, yb in _cell_ocr_regions():
+            for region_name, xa, xb, ya, yb in selected_regions:
                 crop_height, crop_width = crop.shape[:2]
                 rx0 = int(crop_width * xa)
                 rx1 = int(crop_width * xb)
@@ -158,8 +185,9 @@ def extract_chart_cell_ocr_tokens(
                         "confidence": confidence_value,
                         "row_index": getattr(row, "index", None),
                         "col_index": col_index,
+                        "measure_index": measure_index,
                         "region": region_name,
-                        "source": "cell_ocr",
+                        "source": source,
                     }
 
                     if confidence_value < min_confidence:
@@ -178,7 +206,11 @@ def extract_chart_cell_ocr_tokens(
                             text=raw_text,
                             bbox=bbox,
                             confidence=confidence_value,
-                            source="cell_ocr",
+                            source=source,
+                            row_index=getattr(row, "index", None),
+                            col_index=col_index,
+                            measure_index=measure_index,
+                            region=region_name,
                         )
                     )
                 completed_regions += 1
@@ -187,17 +219,170 @@ def extract_chart_cell_ocr_tokens(
                     completed=completed_regions,
                     total=total_regions,
                 )
+            measure_index += 1
 
     tokens.sort(key=lambda token: (token.bbox[1], token.bbox[0]))
     return tokens, rejects
 
 
-def _count_cell_ocr_regions(rows: list[Any]) -> int:
-    region_count = len(_cell_ocr_regions())
-    return sum(
-        max(0, len(getattr(row, "boundaries", [])) - 1) * region_count
-        for row in rows
-    )
+def extract_chart_row_ocr_tokens(
+    image: np.ndarray,
+    rows: list[Any],
+    *,
+    min_confidence: float = 0.05,
+    gpu: bool = False,
+    ocr_scale: float = 2.0,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> tuple[list[OCRToken], list[dict[str, Any]]]:
+    reader = _get_reader(gpu=gpu)
+    tokens: list[OCRToken] = []
+    rejects: list[dict[str, Any]] = []
+
+    regions = _row_ocr_regions(image, rows)
+    total_regions = len(regions)
+    completed_regions = 0
+    for row_index, x0, y0, x1, y1 in regions:
+        crop = image[y0:y1, x0:x1].copy()
+        processed = preprocess_for_ocr(crop, scale=ocr_scale)
+        inverse_scale = 1.0 / ocr_scale
+        results = reader.readtext(processed, detail=1, paragraph=False)
+
+        for points, text, confidence in results:
+            raw_text = (text or "").strip()
+            if not raw_text:
+                continue
+
+            confidence_value = float(confidence)
+            xs = [x0 + point[0] * inverse_scale for point in points]
+            ys = [y0 + point[1] * inverse_scale for point in points]
+            bbox = (float(min(xs)), float(min(ys)), float(max(xs)), float(max(ys)))
+            record = {
+                "text": raw_text,
+                "bbox": list(bbox),
+                "confidence": confidence_value,
+                "row_index": row_index,
+                "source": "cell_ocr_row_system",
+            }
+
+            if confidence_value < min_confidence:
+                rejects.append(
+                    {
+                        **record,
+                        "reason": (
+                            f"confidence {confidence_value:.2f} < threshold {min_confidence:.2f}"
+                        ),
+                    }
+                )
+                continue
+
+            tokens.append(
+                OCRToken(
+                    text=raw_text,
+                    bbox=bbox,
+                    confidence=confidence_value,
+                    source="cell_ocr_row_system",
+                    row_index=row_index,
+                    region="row_system",
+                )
+            )
+
+        completed_regions += 1
+        _report_cell_ocr_progress(
+            progress_callback,
+            completed=completed_regions,
+            total=total_regions,
+        )
+
+    tokens.sort(key=lambda token: (token.bbox[1], token.bbox[0]))
+    return tokens, rejects
+
+
+def _count_cell_ocr_regions(
+    rows: list[Any],
+    *,
+    measure_indices: set[int] | None = None,
+    region_names: tuple[str, ...] | None = None,
+) -> int:
+    region_count = len(_selected_cell_ocr_regions(region_names))
+    measure_index = 1
+    count = 0
+    for row in rows:
+        boundaries = getattr(row, "boundaries", [])
+        for _left, _right in zip(boundaries, boundaries[1:]):
+            if measure_indices is None or measure_index in measure_indices:
+                count += region_count
+            measure_index += 1
+    return count
+
+
+def chart_cell_ocr_region_boxes(
+    image: np.ndarray,
+    rows: list[Any],
+    *,
+    measure_indices: set[int] | None = None,
+    region_names: tuple[str, ...] | None = None,
+    source: str = "cell_ocr",
+) -> list[dict[str, Any]]:
+    row_list = list(rows)
+    selected_regions = _selected_cell_ocr_regions(region_names)
+    boxes: list[dict[str, Any]] = []
+    measure_index = 1
+    for row_position, row in enumerate(row_list):
+        boundaries = getattr(row, "boundaries", [])
+        for col_index, (left, right) in enumerate(zip(boundaries, boundaries[1:]), start=1):
+            if measure_indices is not None and measure_index not in measure_indices:
+                measure_index += 1
+                continue
+
+            cell_box = _measure_cell_box(image, row_list, row_position, row, left, right)
+            if cell_box is None:
+                measure_index += 1
+                continue
+
+            x0, y0, x1, y1 = cell_box
+            crop_width = x1 - x0
+            crop_height = y1 - y0
+            for region_name, xa, xb, ya, yb in selected_regions:
+                rx0 = int(crop_width * xa)
+                rx1 = int(crop_width * xb)
+                ry0 = int(crop_height * ya)
+                ry1 = int(crop_height * yb)
+                if rx1 <= rx0 or ry1 <= ry0:
+                    continue
+
+                boxes.append(
+                    {
+                        "source": source,
+                        "region": region_name,
+                        "row_index": getattr(row, "index", None),
+                        "col_index": col_index,
+                        "measure_index": measure_index,
+                        "bbox": [
+                            float(x0 + rx0),
+                            float(y0 + ry0),
+                            float(x0 + rx1),
+                            float(y0 + ry1),
+                        ],
+                    }
+                )
+            measure_index += 1
+
+    return boxes
+
+
+def chart_row_ocr_region_boxes(
+    image: np.ndarray,
+    rows: list[Any],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "source": "cell_ocr_row_system",
+            "region": "row_system",
+            "row_index": row_index,
+            "bbox": [float(x0), float(y0), float(x1), float(y1)],
+        }
+        for row_index, x0, y0, x1, y1 in _row_ocr_regions(image, rows)
+    ]
 
 
 def _report_cell_ocr_progress(
@@ -210,6 +395,28 @@ def _report_cell_ocr_progress(
         progress_callback(completed, total)
 
 
+def _measure_cell_box(
+    image: np.ndarray,
+    rows: list[Any],
+    row_position: int,
+    row: Any,
+    left: Any,
+    right: Any,
+) -> tuple[int, int, int, int] | None:
+    x0 = int(max(0, float(left.x) + 8))
+    x1 = int(min(image.shape[1], float(right.x) - 8))
+    next_y_top = (
+        float(getattr(rows[row_position + 1], "y_top"))
+        if row_position + 1 < len(rows)
+        else float(image.shape[0])
+    )
+    y0 = int(max(0, float(row.y_top) - 35))
+    y1 = int(min(image.shape[0], next_y_top - 8, float(row.y_bottom) + 80))
+    if x1 <= x0 or y1 <= y0:
+        return None
+    return x0, y0, x1, y1
+
+# (region_name, x_start, x_end, y_start, y_end)
 def _cell_ocr_regions() -> list[tuple[str, float, float, float, float]]:
     return [
         ("full", 0.0, 1.0, 0.0, 1.0),
@@ -218,4 +425,48 @@ def _cell_ocr_regions() -> list[tuple[str, float, float, float, float]]:
         ("left", 0.0, 0.58, 0.0, 1.0),
         ("right", 0.42, 1.0, 0.0, 1.0),
         ("low", 0.0, 1.0, 0.55, 1.0),
+        ("root", 0.0, 0.28, 0.05, 0.77),
+        ("root_accidental", 0.16, 0.33, 0.0, 0.50),
+        ("suffix_lower_right", 0.18, 0.76, 0.34, 0.76),
+        ("slash_bass_below_root", 0.0, 0.64, 0.54, 1.0),
     ]
+
+
+def _selected_cell_ocr_regions(
+    region_names: tuple[str, ...] | None,
+) -> list[tuple[str, float, float, float, float]]:
+    regions = _cell_ocr_regions()
+    if region_names is None:
+        return regions
+
+    wanted = set(region_names)
+    return [region for region in regions if region[0] in wanted]
+
+
+def _row_ocr_regions(
+    image: np.ndarray,
+    rows: list[Any],
+) -> list[tuple[int, int, int, int, int]]:
+    height, width = image.shape[:2]
+    row_list = list(rows)
+    regions: list[tuple[int, int, int, int, int]] = []
+    for row_position, row in enumerate(row_list):
+        boundaries = getattr(row, "boundaries", [])
+        if len(boundaries) < 2:
+            continue
+
+        next_y_top = (
+            float(getattr(row_list[row_position + 1], "y_top"))
+            if row_position + 1 < len(row_list)
+            else float(height)
+        )
+        x0 = int(max(0, float(boundaries[0].x) + 8))
+        x1 = int(min(width, float(boundaries[-1].x) - 8))
+        y0 = int(max(0, float(row.y_top) - 35))
+        y1 = int(min(height, next_y_top - 8, float(row.y_bottom) + 80))
+        if x1 <= x0 or y1 <= y0:
+            continue
+
+        regions.append((int(getattr(row, "index")), x0, y0, x1, y1))
+
+    return regions

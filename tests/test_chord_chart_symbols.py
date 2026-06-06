@@ -28,6 +28,8 @@ def test_chart_chord_symbols_repair_common_chart_ocr_spellings() -> None:
     assert _norm("Fz5") == "F7#5"
     assert _norm("D7v13") == "D7b13"
     assert _norm("G719") == "G7b9"
+    assert _norm("IGz19") == "G7b9"
+    assert _norm("G769") == "G7b9"
     assert _norm("Baz") == "Bbmaj7"
     assert _norm("Bzz") == "Bbmaj7"
     assert _norm("B4z") == "Bbmaj7"

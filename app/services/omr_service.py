@@ -3,18 +3,30 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pipeline.chord_charts.ocr_backend import (
+    chart_cell_ocr_region_boxes,
+    chart_row_ocr_region_boxes,
     extract_chart_cell_ocr_tokens,
     extract_chart_ocr_tokens,
+    extract_chart_row_ocr_tokens,
 )
-from pipeline.chord_charts.overlay import write_chord_chart_overlay
-from pipeline.chord_charts.parser import ChartRow, detect_chart_grid, parse_chord_chart_image
+from pipeline.chord_charts.overlay import (
+    write_chord_chart_ocr_debug_overlay,
+    write_chord_chart_overlay,
+)
+from pipeline.chord_charts.ocr_strategy import plan_selective_chart_cell_ocr
+from pipeline.chord_charts.parser import detect_chart_grid, parse_chord_chart_image
+from pipeline.chord_charts.public_payload import build_public_chord_chart_payload
 from pipeline.chords.easyocr_backend import extract_chord_tokens_ocr
 from pipeline.chords.measure_assignment import assign_chords_to_measures
 from pipeline.chords.ocr_common import load_rgb_image
 from pipeline.chords.overlay import write_chord_assignment_overlay
 from pipeline.chords.paddleocr_rescue import maybe_apply_paddleocr_rescue
 from pipeline.chords.token_filters import filter_probable_non_chords, serialize_token
-from pipeline.export import export_chord_assignments_json, export_chord_chart_json
+from pipeline.export import (
+    export_chord_assignments_json,
+    export_chord_chart_debug_json,
+    export_chord_chart_json,
+)
 from pipeline.homr_artifacts import load_geometry_json
 from pipeline.musicxml_alignment import (
     annotate_measure_alignment,
@@ -51,6 +63,7 @@ class SheetMusicChordPipelineResult:
 @dataclass(frozen=True)
 class ChordChartPipelineResult:
     chord_chart_path: Path
+    chord_chart_debug_path: Path | None = None
 
 
 def run_omr_pipeline(
@@ -282,16 +295,55 @@ def run_chord_chart_pipeline(
     page_tokens, page_rejects = extract_chart_ocr_tokens(image)
     _report_progress(
         progress_callback,
-        progress=45,
-        stage="cell_ocr",
-        message="Reading chart cells",
+        progress=42,
+        stage="row_ocr",
+        message="Reading chart rows",
         current_step=0,
-        total_steps=_estimate_chart_cell_ocr_steps(rows),
+        total_steps=len(rows),
+    )
+    row_tokens, row_rejects = extract_chart_row_ocr_tokens(
+        image,
+        rows,
+        progress_callback=_chart_ocr_progress_callback(
+            progress_callback,
+            start_progress=42,
+            progress_span=18,
+            stage="row_ocr",
+            message_prefix="Reading chart rows",
+        ),
+    )
+    selective_plan = plan_selective_chart_cell_ocr(
+        rows=rows,
+        page_tokens=page_tokens,
+        row_tokens=row_tokens,
+    )
+    selective_region_names = (
+        "root",
+        "root_accidental",
+        "suffix_lower_right",
+    )
+    selective_steps = len(selective_plan.measure_indices) * len(selective_region_names)
+    _report_progress(
+        progress_callback,
+        progress=60,
+        stage="selective_cell_ocr",
+        message="Reading suspicious chart cells",
+        current_step=0,
+        total_steps=selective_steps,
     )
     cell_tokens, cell_rejects = extract_chart_cell_ocr_tokens(
         image,
         rows,
-        progress_callback=_chart_cell_ocr_progress_callback(progress_callback),
+        measure_indices=set(selective_plan.measure_indices),
+        region_names=selective_region_names,
+        source="cell_ocr_targeted",
+        progress_callback=_chart_ocr_progress_callback(
+            progress_callback,
+            start_progress=60,
+            progress_span=20,
+            stage="selective_cell_ocr",
+            message_prefix="Reading suspicious chart cells",
+        ),
     )
     _report_progress(
         progress_callback,
@@ -301,12 +353,38 @@ def run_chord_chart_pipeline(
     )
     result_payload = parse_chord_chart_image(
         image=image,
-        tokens=[*page_tokens, *cell_tokens],
-        ocr_rejects=[*page_rejects, *cell_rejects],
+        tokens=[*page_tokens, *row_tokens, *cell_tokens],
+        ocr_rejects=[*page_rejects, *row_rejects, *cell_rejects],
         job_id=job_id,
         source_file=input_file_path.name,
         rows=rows,
     )
+    result_payload["chart_ocr"]["strategy"] = {
+        **selective_plan.diagnostics,
+        "page_tokens": len(page_tokens),
+        "page_rejects": len(page_rejects),
+        "row_tokens": len(row_tokens),
+        "row_rejects": len(row_rejects),
+        "targeted_cell_tokens": len(cell_tokens),
+        "targeted_cell_rejects": len(cell_rejects),
+        "targeted_cell_region_names": list(selective_region_names),
+        "targeted_cell_ocr_calls": selective_steps,
+    }
+    scan_regions = [
+        {
+            "source": "page_ocr",
+            "region": "page",
+            "bbox": [0.0, 0.0, float(image.shape[1]), float(image.shape[0])],
+        },
+        *chart_row_ocr_region_boxes(image, rows),
+        *chart_cell_ocr_region_boxes(
+            image,
+            rows,
+            measure_indices=set(selective_plan.measure_indices),
+            region_names=selective_region_names,
+            source="cell_ocr_targeted",
+        ),
+    ]
     _report_progress(
         progress_callback,
         progress=92,
@@ -318,19 +396,37 @@ def run_chord_chart_pipeline(
         pages=result_payload["pages"],
         output_dir=output_dir,
     )
+    debug_overlay_path = write_chord_chart_ocr_debug_overlay(
+        image=image,
+        pages=result_payload["pages"],
+        chart_ocr=result_payload["chart_ocr"],
+        ocr_tokens=[*page_tokens, *row_tokens, *cell_tokens],
+        ocr_rejects=[*page_rejects, *row_rejects, *cell_rejects],
+        scan_regions=scan_regions,
+        output_dir=output_dir,
+    )
     result_payload["overlay_file"] = overlay_path.name
+    result_payload["debug_overlay_file"] = debug_overlay_path.name
+    result_payload["chart_ocr"]["debug_overlay_file"] = debug_overlay_path.name
     _report_progress(
         progress_callback,
         progress=97,
         stage="exporting",
         message="Writing chord chart output",
     )
-    chord_chart_path = export_chord_chart_json(
+    chord_chart_debug_path = export_chord_chart_debug_json(
         result_payload=result_payload,
         output_dir=output_dir,
     )
+    chord_chart_path = export_chord_chart_json(
+        result_payload=build_public_chord_chart_payload(result_payload),
+        output_dir=output_dir,
+    )
 
-    return ChordChartPipelineResult(chord_chart_path=chord_chart_path)
+    return ChordChartPipelineResult(
+        chord_chart_path=chord_chart_path,
+        chord_chart_debug_path=chord_chart_debug_path,
+    )
 
 
 def _report_progress(
@@ -348,30 +444,33 @@ def _report_progress(
     progress_callback(progress, stage, message, current_step, total_steps)
 
 
-def _chart_cell_ocr_progress_callback(
+def _chart_ocr_progress_callback(
     progress_callback: ProgressCallback | None,
+    *,
+    start_progress: int,
+    progress_span: int,
+    stage: str,
+    message_prefix: str,
 ) -> Callable[[int, int], None] | None:
     if progress_callback is None:
         return None
 
-    def report_cell_progress(completed_steps: int, total_steps: int) -> None:
-        progress = 45
+    def report_ocr_progress(completed_steps: int, total_steps: int) -> None:
+        progress = start_progress
         if total_steps > 0:
-            progress = 45 + int((completed_steps / total_steps) * 35)
+            progress = start_progress + int(
+                (completed_steps / total_steps) * progress_span
+            )
         _report_progress(
             progress_callback,
             progress=min(80, progress),
-            stage="cell_ocr",
-            message=f"Reading chart cells ({completed_steps}/{total_steps})",
+            stage=stage,
+            message=f"{message_prefix} ({completed_steps}/{total_steps})",
             current_step=completed_steps,
             total_steps=total_steps,
         )
 
-    return report_cell_progress
-
-
-def _estimate_chart_cell_ocr_steps(rows: list[ChartRow]) -> int:
-    return sum(max(0, len(row.boundaries) - 1) * 6 for row in rows)
+    return report_ocr_progress
 
 
 def _postprocess_sheet_music_chord_output(

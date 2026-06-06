@@ -7,7 +7,11 @@ from typing import Any
 import cv2
 import numpy as np
 
-from pipeline.chord_charts.chord_symbol import ParsedChord, parse_chord_symbol
+from pipeline.chord_charts.chord_symbol import (
+    ParsedChord,
+    parse_chord_symbol,
+    repair_numeric_flat_suffix,
+)
 from pipeline.chord_charts.ocr_backend import OCRToken
 from pipeline.chords.models import quantize_beat
 
@@ -62,7 +66,7 @@ def parse_chord_chart_image(
         raise ValueError("Could not detect chord-chart measure grid.")
 
     warnings: list[str] = []
-    has_cell_tokens = any(token.source == "cell_ocr" for token in tokens)
+    has_cell_tokens = any(token.source.startswith("cell_ocr") for token in tokens)
     time_signature = _extract_time_signature(tokens, rows)
     if time_signature is None:
         if _has_visible_time_signature_region(image, rows):
@@ -213,6 +217,7 @@ def parse_chord_chart_image(
             measure.ending_number = row.ending_number
         _remove_navigation_fragment_chords(measure)
         _apply_ocr_context_to_measure(measure)
+        _apply_numeric_alteration_fragments(measure)
         _infer_repeated_rootless_minor_chords(measure, beats_per_bar=beats_per_bar)
         _merge_slash_bass_symbols(measure)
         _merge_vertical_bass_chords(measure, image=image)
@@ -225,7 +230,10 @@ def parse_chord_chart_image(
         ):
             measure.symbols.append(visual_repeat)
             detected_symbols.append(visual_repeat)
+        measure.symbols = _deduplicate_events(measure.symbols)
+        measure.navigation = _deduplicate_events(measure.navigation)
 
+    detected_symbols = _deduplicate_events(detected_symbols)
     _resolve_previous_measure_repeats(measures)
     page_payload = _page_payload(
         image=image,
@@ -1045,9 +1053,17 @@ def _apply_ocr_context_to_measure(measure: MeasureCell) -> None:
             continue
 
         accidental = components.get("accidental")
+        if components.get("alterations"):
+            continue
+
+        best_confidence = float(best.get("confidence") or 0.0)
         for chord in context_chords:
             other = chord.get("components") or {}
-            if other.get("root") == root and other.get("accidental"):
+            if (
+                other.get("root") == root
+                and other.get("accidental")
+                and float(chord.get("confidence") or 0.0) >= best_confidence - 0.05
+            ):
                 accidental = other.get("accidental")
                 break
 
@@ -1087,6 +1103,66 @@ def _apply_ocr_context_to_measure(measure: MeasureCell) -> None:
             continue
 
         _rewrite_chord(best, root=root, accidental=accidental, body=body)
+
+
+def _apply_numeric_alteration_fragments(measure: MeasureCell) -> None:
+    if not measure.chords:
+        return
+
+    measure_width = measure.bbox[2] - measure.bbox[0]
+    max_suffix_distance = max(70.0, measure_width * 0.34)
+    left_tolerance = max(12.0, measure_width * 0.04)
+
+    for token in measure.ocr_tokens:
+        body = repair_numeric_flat_suffix(token.text)
+        if body is None:
+            continue
+
+        candidates: list[tuple[float, dict[str, Any]]] = []
+        for chord in measure.chords:
+            if _is_lower_bass_chord_candidate(chord, measure):
+                continue
+            components = chord.get("components") or {}
+            if not components.get("root"):
+                continue
+            if components.get("quality") in {
+                "minor",
+                "minor_major",
+                "diminished",
+                "half_diminished",
+            }:
+                continue
+
+            distance = token.cx - _bbox_center_x(chord.get("bbox"))
+            if -left_tolerance <= distance <= max_suffix_distance:
+                candidates.append((abs(distance), chord))
+
+        if not candidates:
+            continue
+
+        _distance, target = min(candidates, key=lambda item: item[0])
+        components = target.get("components") or {}
+        root = str(components.get("root") or "")
+        if not root:
+            continue
+
+        target.setdefault("context_fragments", []).append(
+            {
+                "text_raw": token.text,
+                "text_norm": body,
+                "bbox": [float(value) for value in token.bbox],
+                "confidence": token.confidence,
+                "source": token.source,
+                "region": token.region,
+                "reason": "numeric_6_as_flat_suffix",
+            }
+        )
+        _rewrite_chord(
+            target,
+            root=root,
+            accidental=components.get("accidental"),
+            body=body,
+        )
 
 
 def _infer_repeated_rootless_minor_chords(
@@ -1253,6 +1329,12 @@ def _rewrite_chord(
     if bass:
         text_norm = f"{text_norm}/{bass}"
 
+    parsed = parse_chord_symbol(text_norm)
+    if parsed is not None:
+        chord["text_norm"] = parsed.text_norm
+        chord["components"] = parsed.to_dict()["components"]
+        return
+
     chord["text_norm"] = text_norm
     chord["components"] = {
         "root": root,
@@ -1266,21 +1348,99 @@ def _rewrite_chord(
 
 def _chord_score(chord: dict[str, Any]) -> float:
     components = chord.get("components") or {}
-    score = float(chord.get("confidence") or 0.0)
-    score += len(str(chord.get("text_norm") or "")) * 0.25
+    score = float(chord.get("confidence") or 0.0) * 3.0
+    score += len(str(chord.get("text_norm") or "")) * 0.20
     if components.get("accidental"):
-        score += 1.5
+        score += 0.6
     if components.get("quality") not in {None, "major"}:
-        score += 1.0
+        score += 0.8
     if components.get("extensions"):
-        score += 1.0
+        score += 0.8
     if components.get("alterations"):
         score += 1.0
     if components.get("bass"):
         score += 1.2
     if "maj7" in str(chord.get("text_norm") or ""):
-        score += 1.2
+        score += 0.8
     return score
+
+
+def _deduplicate_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduplicated: list[dict[str, Any]] = []
+    for event in events:
+        if any(_same_event(event, existing) for existing in deduplicated):
+            continue
+        deduplicated.append(event)
+    return deduplicated
+
+
+def _same_event(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    if _event_identity(left) != _event_identity(right):
+        return False
+
+    left_bbox = left.get("bbox")
+    right_bbox = right.get("bbox")
+    if _bbox_iou(left_bbox, right_bbox) >= 0.75:
+        return True
+
+    left_center = _bbox_center(left_bbox)
+    right_center = _bbox_center(right_bbox)
+    if left_center is None or right_center is None:
+        return True
+
+    return (
+        abs(left_center[0] - right_center[0]) <= 12.0
+        and abs(left_center[1] - right_center[1]) <= 12.0
+    )
+
+
+def _event_identity(event: dict[str, Any]) -> tuple[object, ...]:
+    text = re.sub(r"\s+", "", str(event.get("text_raw") or "")).lower()
+    return (
+        event.get("type"),
+        event.get("measure_index"),
+        event.get("row_index"),
+        event.get("section"),
+        event.get("number"),
+        event.get("target_ending"),
+        text,
+    )
+
+
+def _bbox_center(bbox: object) -> tuple[float, float] | None:
+    if not isinstance(bbox, list | tuple) or len(bbox) != 4:
+        return None
+    return (
+        (float(bbox[0]) + float(bbox[2])) / 2.0,
+        (float(bbox[1]) + float(bbox[3])) / 2.0,
+    )
+
+
+def _bbox_iou(left: object, right: object) -> float:
+    if (
+        not isinstance(left, list | tuple)
+        or not isinstance(right, list | tuple)
+        or len(left) != 4
+        or len(right) != 4
+    ):
+        return 0.0
+
+    lx0, ly0, lx1, ly1 = [float(value) for value in left]
+    rx0, ry0, rx1, ry1 = [float(value) for value in right]
+    ix0 = max(lx0, rx0)
+    iy0 = max(ly0, ry0)
+    ix1 = min(lx1, rx1)
+    iy1 = min(ly1, ry1)
+    intersection = max(0.0, ix1 - ix0) * max(0.0, iy1 - iy0)
+    if intersection <= 0.0:
+        return 0.0
+
+    left_area = max(0.0, lx1 - lx0) * max(0.0, ly1 - ly0)
+    right_area = max(0.0, rx1 - rx0) * max(0.0, ry1 - ry0)
+    union = left_area + right_area - intersection
+    if union <= 0.0:
+        return 0.0
+    return intersection / union
 
 
 def _bbox_center_x(bbox: object) -> float:
@@ -1550,13 +1710,28 @@ def _page_payload(
 
 
 def _flow_payload(measures: list[MeasureCell]) -> dict[str, Any]:
+    sections: list[dict[str, Any]] = []
     repeat_groups = []
     navigation = []
     endings_by_number: dict[int, list[MeasureCell]] = {}
     section_start_by_name: dict[str, int] = {}
     current_repeat_start: int | None = None
+    current_section: str | None = None
+    current_section_start: int | None = None
 
     for measure in measures:
+        if measure.section != current_section:
+            if current_section is not None and current_section_start is not None:
+                sections.append(
+                    {
+                        "section": current_section,
+                        "start_measure_index": current_section_start,
+                        "end_measure_index": measure.index - 1,
+                    }
+                )
+            current_section = measure.section
+            current_section_start = measure.index if measure.section is not None else None
+
         if measure.section is not None and measure.section not in section_start_by_name:
             section_start_by_name[measure.section] = measure.index
 
@@ -1583,6 +1758,15 @@ def _flow_payload(measures: list[MeasureCell]) -> dict[str, Any]:
 
         navigation.extend(measure.navigation)
 
+    if current_section is not None and current_section_start is not None and measures:
+        sections.append(
+            {
+                "section": current_section,
+                "start_measure_index": current_section_start,
+                "end_measure_index": measures[-1].index,
+            }
+        )
+
     endings = []
     for number, ending_measures in sorted(endings_by_number.items()):
         endings.append(
@@ -1595,6 +1779,7 @@ def _flow_payload(measures: list[MeasureCell]) -> dict[str, Any]:
         )
 
     return {
+        "sections": sections,
         "repeat_groups": repeat_groups,
         "endings": endings,
         "navigation": navigation,

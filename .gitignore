@@ -20,3 +20,5 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+README-local_testing.md

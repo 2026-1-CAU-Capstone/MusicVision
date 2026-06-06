@@ -198,7 +198,7 @@ def _repair_ocr_spellings(token: str) -> str:
         return "Am7b5"
     if rest_lower == "719":
         return f"{prefix}7b9"
-    if rest_lower in {"7b1z", "7h3", "713"}:
+    if rest_lower in {"7b1z", "7h3", "713", "7113", "7l13", "7i13"}:
         return f"{prefix}7b13"
 
     numeric_flat_suffix = repair_numeric_flat_suffix(rest)

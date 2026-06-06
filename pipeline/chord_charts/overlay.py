@@ -255,7 +255,8 @@ def _debug_panel_lines(
         key = _token_key(token_dict)
         accepted = accepted_lookup.get(key)
         unassigned = unassigned_lookup.get(key)
-        raw = str(token_dict.get("text") or "")
+        raw = _ocr_raw_text(token_dict)
+        normalized = str(token_dict.get("text") or "")
         corrected = (
             str(accepted.get("text_norm"))
             if accepted is not None and accepted.get("text_norm") is not None
@@ -273,6 +274,7 @@ def _debug_panel_lines(
                 (
                     f"{index:03d} {status} {token_dict.get('source', '?')}"
                     f"{_measure_region_suffix(token_dict)} raw={raw!r}"
+                    f" norm={normalized!r}"
                     f" corrected={corrected!r} conf={_confidence(token_dict)}"
                     f" bbox={_bbox_text(token_dict.get('bbox'))}"
                 ),
@@ -315,6 +317,9 @@ def _ocr_token_display_label(
     unassigned: dict[str, Any] | None,
 ) -> str:
     raw = str(token.get("text") or "")
+    normalized_from = _ocr_raw_text(token)
+    if normalized_from != raw:
+        raw = f"{normalized_from}=>{raw}"
     prefix = _short_source_label(token)
     if accepted is not None:
         corrected = str(accepted.get("text_norm") or raw)
@@ -415,6 +420,21 @@ def _token_key(token: dict[str, Any]) -> tuple[Any, ...]:
         str(token.get("text") or token.get("text_raw") or ""),
         _bbox_key(token.get("bbox")),
     )
+
+
+def _ocr_raw_text(token: dict[str, Any]) -> str:
+    debug = token.get("debug")
+    if not isinstance(debug, dict):
+        return str(token.get("text") or "")
+
+    normalization = debug.get("visual_normalization")
+    if not isinstance(normalization, dict):
+        return str(token.get("text") or "")
+
+    raw_text = normalization.get("raw_text")
+    if raw_text is None:
+        return str(token.get("text") or "")
+    return str(raw_text)
 
 
 def _bbox_key(bbox: object) -> tuple[float, ...]:

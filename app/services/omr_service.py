@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pipeline.chord_charts.ocr_backend import (
+    CHART_SEMANTIC_REGION_ALLOWLISTS,
     chart_cell_ocr_region_boxes,
     chart_row_ocr_region_boxes,
     extract_chart_cell_ocr_tokens,
@@ -16,6 +17,7 @@ from pipeline.chord_charts.overlay import (
 from pipeline.chord_charts.ocr_strategy import plan_selective_chart_cell_ocr
 from pipeline.chord_charts.parser import detect_chart_grid, parse_chord_chart_image
 from pipeline.chord_charts.public_payload import build_public_chord_chart_payload
+from pipeline.chord_charts.semantic_assembly import assemble_semantic_chord_tokens
 from pipeline.chords.easyocr_backend import extract_chord_tokens_ocr
 from pipeline.chords.measure_assignment import assign_chords_to_measures
 from pipeline.chords.ocr_common import load_rgb_image
@@ -336,6 +338,7 @@ def run_chord_chart_pipeline(
         rows,
         measure_indices=set(selective_plan.measure_indices),
         region_names=selective_region_names,
+        region_allowlists=CHART_SEMANTIC_REGION_ALLOWLISTS,
         source="cell_ocr_targeted",
         progress_callback=_chart_ocr_progress_callback(
             progress_callback,
@@ -345,6 +348,10 @@ def run_chord_chart_pipeline(
             message_prefix="Reading suspicious chart cells",
         ),
     )
+    semantic_assembly = assemble_semantic_chord_tokens(
+        cell_tokens,
+        image=image,
+    )
     _report_progress(
         progress_callback,
         progress=82,
@@ -353,7 +360,7 @@ def run_chord_chart_pipeline(
     )
     result_payload = parse_chord_chart_image(
         image=image,
-        tokens=[*page_tokens, *row_tokens, *cell_tokens],
+        tokens=[*page_tokens, *row_tokens, *semantic_assembly.tokens],
         ocr_rejects=[*page_rejects, *row_rejects, *cell_rejects],
         job_id=job_id,
         source_file=input_file_path.name,
@@ -367,8 +374,11 @@ def run_chord_chart_pipeline(
         "row_rejects": len(row_rejects),
         "targeted_cell_tokens": len(cell_tokens),
         "targeted_cell_rejects": len(cell_rejects),
+        "targeted_semantic_assembled_tokens": len(semantic_assembly.tokens),
         "targeted_cell_region_names": list(selective_region_names),
         "targeted_cell_ocr_calls": selective_steps,
+        "region_allowlists_enabled": True,
+        "semantic_assembly": semantic_assembly.diagnostics,
     }
     scan_regions = [
         {
@@ -400,7 +410,7 @@ def run_chord_chart_pipeline(
         image=image,
         pages=result_payload["pages"],
         chart_ocr=result_payload["chart_ocr"],
-        ocr_tokens=[*page_tokens, *row_tokens, *cell_tokens],
+        ocr_tokens=[*page_tokens, *row_tokens, *cell_tokens, *semantic_assembly.tokens],
         ocr_rejects=[*page_rejects, *row_rejects, *cell_rejects],
         scan_regions=scan_regions,
         output_dir=output_dir,

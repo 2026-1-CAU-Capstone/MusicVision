@@ -262,6 +262,49 @@ def test_chord_chart_parser_does_not_let_weak_accidental_override_stronger_chord
     assert measure["chords"][0]["text_norm"] == "Amaj7"
 
 
+def test_chord_chart_parser_only_lets_cell_ocr_override_its_own_measure() -> None:
+    image = np.full((260, 520, 3), 255, dtype=np.uint8)
+    rows = [
+        ChartRow(
+            index=1,
+            y_top=100,
+            y_bottom=200,
+            boundaries=[
+                Boundary(50, 100, 200, 1),
+                Boundary(250, 100, 200, 1),
+                Boundary(470, 100, 200, 1),
+            ],
+        )
+    ]
+    tokens = [
+        OCRToken("C7", (80, 118, 130, 170), 0.95, source="page_ocr"),
+        OCRToken("F7", (285, 118, 335, 170), 0.95, source="page_ocr"),
+        OCRToken(
+            "Cm7",
+            (78, 116, 145, 172),
+            0.88,
+            source="cell_ocr_semantic_assembled",
+            row_index=1,
+            col_index=1,
+            measure_index=1,
+            region="semantic_chord",
+        ),
+    ]
+
+    payload = parse_chord_chart_image(
+        image=image,
+        tokens=tokens,
+        ocr_rejects=[],
+        job_id="chart-job",
+        source_file="chart.png",
+        rows=rows,
+    )
+
+    measures = payload["pages"][0]["systems"][0]["measures"]
+    assert measures[0]["chords"][0]["text_norm"] == "Cm7"
+    assert measures[1]["chords"][0]["text_norm"] == "F7"
+
+
 def test_chord_chart_parser_attaches_numeric_flat_suffix_fragment() -> None:
     image = np.full((260, 360, 3), 255, dtype=np.uint8)
     rows = [

@@ -14,6 +14,10 @@ from pipeline.chord_charts.chord_symbol import (
     repair_numeric_flat_suffix,
 )
 from pipeline.chord_charts.ocr_backend import OCRToken
+from pipeline.chord_charts.visual_suffix import (
+    normalize_suffix_ocr_text,
+    suffix_has_triangle as visual_suffix_has_triangle,
+)
 
 
 @dataclass(frozen=True)
@@ -223,6 +227,14 @@ def _body_from_suffix_text(text: str | None) -> str | None:
         return None
     if compact in {"b", "B", "#", "\u266d", "\u266f"}:
         return None
+    if compact in {"\u00f8", "\u00f87"}:
+        return "m7b5"
+    if compact in {"\u00b0", "o", "O", "0"}:
+        return "dim"
+    if compact in {"\u00b07", "o7", "O7", "07"}:
+        return "dim7"
+    if compact in {"\u25b3", "\u2206", "\u0394", "\u25b37", "\u22067", "\u03947"}:
+        return "maj7"
     if compact in {"77", "777"}:
         return "7"
 
@@ -288,13 +300,23 @@ def _repair_numeric_flat_nine_suffix(text: str) -> str | None:
 
 
 def _repair_numeric_flat_thirteen_suffix(text: str) -> str | None:
-    if text not in {"713", "7l3", "7I3"}:
+    if text not in {"713", "7l3", "7I3", "7113", "7l13", "7I13"}:
         return None
     return "7b13"
 
 
 def _body_from_suffix_token(token: OCRToken, *, image: np.ndarray | None) -> str | None:
     compact = re.sub(r"\s+", "", token.text or "").strip(".,;:!|[](){}")
+    if image is not None:
+        visual_text = normalize_suffix_ocr_text(
+            token.text or "",
+            _token_image_crop(token, image, pad=8),
+        )
+        if visual_text != (token.text or ""):
+            visual_body = _body_from_suffix_text(visual_text)
+            if visual_body is not None:
+                return visual_body
+
     if (
         image is not None
         and _suffix_text_can_be_triangle(compact)
@@ -302,9 +324,11 @@ def _body_from_suffix_token(token: OCRToken, *, image: np.ndarray | None) -> str
     ):
         return "maj7"
 
-    if compact in {"77", "777"}:
+    if compact in {"77", "777", "76", "776"}:
         if image is not None and _suffix_has_minor_dash(token, image):
-            return "m7"
+            return f"m{compact[-1]}"
+        if compact in {"76", "776"}:
+            return None
         return "7"
 
     return _body_from_suffix_text(token.text)
@@ -458,39 +482,28 @@ def _suffix_has_minor_dash(token: OCRToken, image: np.ndarray) -> bool:
 
 
 def _suffix_has_triangle(token: OCRToken, image: np.ndarray) -> bool:
-    binary = _token_binary_crop(token, image, pad=8)
-    if binary is None:
+    crop = _token_image_crop(token, image, pad=8)
+    if crop is None:
         return False
-
-    contours, _hierarchy = cv2.findContours(
-        binary,
-        cv2.RETR_EXTERNAL,
-        cv2.CHAIN_APPROX_SIMPLE,
-    )
-    crop_height, crop_width = binary.shape[:2]
-    for contour in contours:
-        area = cv2.contourArea(contour)
-        if area < 18:
-            continue
-        x, y, width, height = cv2.boundingRect(contour)
-        if width < 8 or height < 8:
-            continue
-        if x + width / 2.0 > crop_width * 0.62:
-            continue
-        if y + height / 2.0 > crop_height * 0.82:
-            continue
-
-        perimeter = cv2.arcLength(contour, closed=True)
-        if perimeter <= 0:
-            continue
-        approximated = cv2.approxPolyDP(contour, 0.08 * perimeter, closed=True)
-        if 3 <= len(approximated) <= 4:
-            return True
-
-    return False
+    return visual_suffix_has_triangle(crop)
 
 
 def _token_binary_crop(token: OCRToken, image: np.ndarray, *, pad: int) -> np.ndarray | None:
+    crop = _token_image_crop(token, image, pad=pad)
+    if crop is None:
+        return None
+
+    gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
+    _threshold, binary = cv2.threshold(
+        gray,
+        0,
+        255,
+        cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU,
+    )
+    return binary
+
+
+def _token_image_crop(token: OCRToken, image: np.ndarray, *, pad: int) -> np.ndarray | None:
     height, width = image.shape[:2]
     x0, y0, x1, y1 = [int(round(value)) for value in token.bbox]
     x0 = max(0, x0 - pad)
@@ -500,15 +513,7 @@ def _token_binary_crop(token: OCRToken, image: np.ndarray, *, pad: int) -> np.nd
     if x1 <= x0 or y1 <= y0:
         return None
 
-    crop = image[y0:y1, x0:x1]
-    gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
-    _threshold, binary = cv2.threshold(
-        gray,
-        0,
-        255,
-        cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU,
-    )
-    return binary
+    return image[y0:y1, x0:x1]
 
 
 def _measure_width(tokens: list[OCRToken]) -> float:

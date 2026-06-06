@@ -77,6 +77,17 @@ def test_semantic_assembly_repairs_numeric_sharp_suffix() -> None:
     assert [token.text for token in result.tokens] == ["F7#5"]
 
 
+def test_semantic_assembly_repairs_split_numeric_flat_thirteen_suffix() -> None:
+    result = assemble_semantic_chord_tokens(
+        [
+            _token("D", (10.0, 10.0, 34.0, 40.0), region="root"),
+            _token("7113", (32.0, 24.0, 86.0, 42.0), region="suffix_lower_right"),
+        ]
+    )
+
+    assert [token.text for token in result.tokens] == ["D7b13"]
+
+
 def test_semantic_assembly_combines_split_seventh_and_sharp_suffix() -> None:
     result = assemble_semantic_chord_tokens(
         [
@@ -142,6 +153,49 @@ def test_semantic_assembly_uses_visual_dash_for_minor_seventh() -> None:
     )
 
     assert [token.text for token in result.tokens] == ["Fm7"]
+
+
+def test_semantic_assembly_uses_visual_dash_for_minor_sixth() -> None:
+    image = np.full((80, 90, 3), 255, dtype=np.uint8)
+    image[34:37, 34:47] = 0
+    result = assemble_semantic_chord_tokens(
+        [
+            _token("G", (10.0, 10.0, 30.0, 40.0), region="root"),
+            _token("76", (34.0, 24.0, 66.0, 42.0), region="suffix_lower_right"),
+        ],
+        image=image,
+    )
+
+    assert [token.text for token in result.tokens] == ["Gm6"]
+
+
+def test_semantic_assembly_uses_visual_half_diminished_symbol() -> None:
+    image = np.full((90, 90, 3), 255, dtype=np.uint8)
+    cv2.circle(image, (42, 36), 12, (0, 0, 0), 2)
+    cv2.line(image, (34, 50), (50, 22), (0, 0, 0), 2)
+    result = assemble_semantic_chord_tokens(
+        [
+            _token("A", (10.0, 10.0, 30.0, 40.0), region="root"),
+            _token("07", (30.0, 18.0, 66.0, 50.0), region="suffix_lower_right"),
+        ],
+        image=image,
+    )
+
+    assert [token.text for token in result.tokens] == ["Am7b5"]
+
+
+def test_semantic_assembly_uses_visual_diminished_symbol() -> None:
+    image = np.full((90, 90, 3), 255, dtype=np.uint8)
+    cv2.circle(image, (42, 36), 12, (0, 0, 0), 2)
+    result = assemble_semantic_chord_tokens(
+        [
+            _token("E", (10.0, 10.0, 30.0, 40.0), region="root"),
+            _token("07", (30.0, 18.0, 66.0, 50.0), region="suffix_lower_right"),
+        ],
+        image=image,
+    )
+
+    assert [token.text for token in result.tokens] == ["Edim7"]
 
 
 def test_semantic_assembly_uses_visual_triangle_for_major_seventh() -> None:

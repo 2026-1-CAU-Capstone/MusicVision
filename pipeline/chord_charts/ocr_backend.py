@@ -6,6 +6,7 @@ from typing import Any
 
 import numpy as np
 
+from pipeline.chord_charts.visual_suffix import normalize_suffix_ocr_text
 from pipeline.chords.easyocr_backend import _get_reader
 from pipeline.chords.ocr_common import preprocess_for_ocr
 
@@ -41,6 +42,7 @@ class OCRToken:
     col_index: int | None = None
     measure_index: int | None = None
     region: str | None = None
+    debug: dict[str, Any] | None = None
 
     @property
     def cx(self) -> float:
@@ -65,6 +67,8 @@ class OCRToken:
             payload["measure_index"] = self.measure_index
         if self.region is not None:
             payload["region"] = self.region
+        if self.debug is not None:
+            payload["debug"] = self.debug
         return payload
 
 
@@ -201,7 +205,11 @@ def extract_chart_cell_ocr_tokens(
                 )
 
                 for points, text, confidence in results:
-                    raw_text = (text or "").strip()
+                    raw_text, debug = _normalize_cell_region_text(
+                        region_name,
+                        (text or "").strip(),
+                        subcrop,
+                    )
                     if not raw_text:
                         continue
 
@@ -219,6 +227,8 @@ def extract_chart_cell_ocr_tokens(
                         "region": region_name,
                         "source": source,
                     }
+                    if debug is not None:
+                        record["debug"] = debug
 
                     if confidence_value < min_confidence:
                         rejects.append(
@@ -241,6 +251,7 @@ def extract_chart_cell_ocr_tokens(
                             col_index=col_index,
                             measure_index=measure_index,
                             region=region_name,
+                            debug=debug,
                         )
                     )
                 completed_regions += 1
@@ -337,6 +348,26 @@ def _read_chart_text(
     if allowlist is not None:
         kwargs["allowlist"] = allowlist
     return reader.readtext(image, **kwargs)
+
+
+def _normalize_cell_region_text(
+    region_name: str,
+    text: str,
+    image: np.ndarray,
+) -> tuple[str, dict[str, Any] | None]:
+    if region_name != "suffix_lower_right":
+        return text, None
+
+    normalized = normalize_suffix_ocr_text(text, image)
+    debug = {
+        "visual_normalization": {
+            "normalizer": "visual_suffix",
+            "raw_text": text,
+            "normalized_text": normalized,
+            "changed": normalized != text,
+        }
+    }
+    return normalized, debug
 
 
 def _count_cell_ocr_regions(
@@ -469,7 +500,7 @@ def _cell_ocr_regions() -> list[tuple[str, float, float, float, float]]:
         ("low", 0.0, 1.0, 0.55, 1.0),
         ("root", 0.0, 0.28, 0.05, 0.77),
         ("root_accidental", 0.16, 0.33, 0.0, 0.50),
-        ("suffix_lower_right", 0.20, 0.76, 0.34, 0.76),
+        ("suffix_lower_right", 0.20, 0.55, 0.34, 0.76),
         ("slash_bass_below_root", 0.0, 0.64, 0.54, 1.0),
     ]
 

@@ -15,13 +15,18 @@ from pipeline.chord_charts.overlay import (
 )
 from pipeline.chord_charts.ocr_strategy import plan_selective_chart_cell_ocr
 from pipeline.chord_charts.parser import detect_chart_grid, parse_chord_chart_image
+from pipeline.chord_charts.public_payload import build_public_chord_chart_payload
 from pipeline.chords.easyocr_backend import extract_chord_tokens_ocr
 from pipeline.chords.measure_assignment import assign_chords_to_measures
 from pipeline.chords.ocr_common import load_rgb_image
 from pipeline.chords.overlay import write_chord_assignment_overlay
 from pipeline.chords.paddleocr_rescue import maybe_apply_paddleocr_rescue
 from pipeline.chords.token_filters import filter_probable_non_chords, serialize_token
-from pipeline.export import export_chord_assignments_json, export_chord_chart_json
+from pipeline.export import (
+    export_chord_assignments_json,
+    export_chord_chart_debug_json,
+    export_chord_chart_json,
+)
 from pipeline.homr_artifacts import load_geometry_json
 from pipeline.musicxml_alignment import (
     annotate_measure_alignment,
@@ -58,6 +63,7 @@ class SheetMusicChordPipelineResult:
 @dataclass(frozen=True)
 class ChordChartPipelineResult:
     chord_chart_path: Path
+    chord_chart_debug_path: Path | None = None
 
 
 def run_omr_pipeline(
@@ -408,12 +414,19 @@ def run_chord_chart_pipeline(
         stage="exporting",
         message="Writing chord chart output",
     )
-    chord_chart_path = export_chord_chart_json(
+    chord_chart_debug_path = export_chord_chart_debug_json(
         result_payload=result_payload,
         output_dir=output_dir,
     )
+    chord_chart_path = export_chord_chart_json(
+        result_payload=build_public_chord_chart_payload(result_payload),
+        output_dir=output_dir,
+    )
 
-    return ChordChartPipelineResult(chord_chart_path=chord_chart_path)
+    return ChordChartPipelineResult(
+        chord_chart_path=chord_chart_path,
+        chord_chart_debug_path=chord_chart_debug_path,
+    )
 
 
 def _report_progress(

@@ -459,48 +459,28 @@ def test_process_chord_chart_returns_chart(
             "job_id": job_id,
             "source_file": input_file_path.name,
             "source_type": "chord_chart",
-            "pipeline": "chart_grid_ocr",
             "time_signature": {
-                "text_raw": "4/4",
                 "numerator": 4,
                 "denominator": 4,
             },
-            "pages": [
+            "measure_count": 1,
+            "chords": [
                 {
-                    "page": 1,
-                    "assignment_source": "chart_grid_detection",
-                    "systems": [
-                        {
-                            "index": 1,
-                            "section": "A",
-                            "measures": [
-                                {
-                                    "index": 1,
-                                    "chords": [
-                                        {
-                                            "text_raw": "Ab-7b5",
-                                            "text_norm": "Abm7b5",
-                                            "beat": 1,
-                                        }
-                                    ],
-                                    "symbols": [],
-                                }
-                            ],
-                        }
-                    ],
+                    "kind": "chord",
+                    "text": "Abm7b5",
+                    "measure_index": 1,
+                    "beat": 1,
+                    "section": "A",
+                    "source": "direct",
                 }
             ],
             "flow": {
+                "sections": [
+                    {"section": "A", "start_measure_index": 1, "end_measure_index": 1}
+                ],
                 "repeat_groups": [],
                 "endings": [],
                 "navigation": [],
-            },
-            "chart_ocr": {
-                "backend": "easyocr",
-                "accepted_tokens": [],
-                "rejected_hits": [],
-                "unassigned_tokens": [],
-                "detected_symbols": [],
             },
             "warnings": [],
         }
@@ -527,12 +507,7 @@ def test_process_chord_chart_returns_chart(
     assert payload["source_type"] == "chord_chart"
     assert payload["chord_chart_path"] == "jobs/chart-job/output/chord_chart.json"
     assert payload["chord_chart"]["source_type"] == "chord_chart"
-    assert (
-        payload["chord_chart"]["pages"][0]["systems"][0]["measures"][0]["chords"][0][
-            "text_norm"
-        ]
-        == "Abm7b5"
-    )
+    assert payload["chord_chart"]["chords"][0]["text"] == "Abm7b5"
 
     completed = client.get("/omr/jobs/chart-job")
     assert completed.status_code == 200

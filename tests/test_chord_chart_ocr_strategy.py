@@ -1,5 +1,8 @@
 from pipeline.chord_charts.ocr_backend import OCRToken
-from pipeline.chord_charts.ocr_strategy import plan_selective_chart_cell_ocr
+from pipeline.chord_charts.ocr_strategy import (
+    plan_multi_chord_chart_cell_ocr,
+    plan_selective_chart_cell_ocr,
+)
 from pipeline.chord_charts.parser import Boundary, ChartRow
 
 
@@ -59,3 +62,30 @@ def test_selective_plan_ignores_clean_agreement() -> None:
     )
 
     assert plan.measure_indices == []
+
+
+def test_multi_chord_plan_flags_wide_token_with_space() -> None:
+    plan = plan_multi_chord_chart_cell_ocr(
+        rows=_rows(),
+        page_tokens=[OCRToken("Ig- G", (55, 115, 195, 160), 0.50, "page_ocr")],
+        row_tokens=[],
+    )
+
+    assert plan.measure_indices == [1]
+    reasons = plan.diagnostics["selected_measures"][0]["reasons"]
+    assert "wide_ocr_token_with_internal_space" in reasons
+
+
+def test_multi_chord_plan_flags_right_half_chord_like_fragment() -> None:
+    plan = plan_multi_chord_chart_cell_ocr(
+        rows=_rows(),
+        page_tokens=[
+            OCRToken("IF-", (55, 115, 115, 160), 0.95, "page_ocr"),
+            OCRToken("Ez", (138, 115, 190, 160), 0.98, "page_ocr"),
+        ],
+        row_tokens=[],
+    )
+
+    assert plan.measure_indices == [1]
+    reasons = plan.diagnostics["selected_measures"][0]["reasons"]
+    assert "right_half_chord_like_fragment" in reasons

@@ -133,6 +133,89 @@ def plan_selective_chart_cell_ocr(
     )
 
 
+def plan_multi_chord_chart_cell_ocr(
+    *,
+    rows: list[Any],
+    page_tokens: list[OCRToken],
+    row_tokens: list[OCRToken],
+) -> SelectiveCellOCRPlan:
+    regions = build_chart_measure_regions(rows)
+    evidence_by_measure = {
+        region.index: _MeasureEvidence(region=region) for region in regions
+    }
+
+    raw_tokens_by_measure: dict[int, list[OCRToken]] = {
+        region.index: [] for region in regions
+    }
+    for token in [*page_tokens, *row_tokens]:
+        measure = _measure_for_token(token, regions)
+        if measure is not None:
+            raw_tokens_by_measure[measure.index].append(token)
+
+    for token in _expand_chart_tokens([*page_tokens, *row_tokens]):
+        measure = _measure_for_token(token, regions)
+        if measure is None:
+            continue
+
+        evidence = evidence_by_measure[measure.index]
+        fragment = {
+            "text": token.text,
+            "bbox": list(token.bbox),
+            "confidence": token.confidence,
+            "source": token.source,
+        }
+        if _is_chord_like_fragment(token.text):
+            evidence.chord_like_fragments.append(fragment)
+        elif _is_suffix_like_fragment(token.text):
+            evidence.suffix_fragments.append(fragment)
+
+    selected: list[dict[str, Any]] = []
+    for measure_index, evidence in evidence_by_measure.items():
+        reasons = _multi_chord_reasons(
+            evidence,
+            raw_tokens=raw_tokens_by_measure.get(measure_index, []),
+        )
+        if not reasons:
+            continue
+
+        selected.append(
+            {
+                "measure_index": evidence.region.index,
+                "row_index": evidence.region.row_index,
+                "col_index": evidence.region.col_index,
+                "reasons": reasons,
+                "chord_like_fragments": evidence.chord_like_fragments,
+                "suffix_fragments": evidence.suffix_fragments,
+                "raw_tokens": [
+                    {
+                        "text": token.text,
+                        "bbox": list(token.bbox),
+                        "confidence": token.confidence,
+                        "source": token.source,
+                    }
+                    for token in raw_tokens_by_measure.get(measure_index, [])
+                ],
+            }
+        )
+
+    measure_indices = [item["measure_index"] for item in selected]
+    return SelectiveCellOCRPlan(
+        measure_indices=measure_indices,
+        diagnostics={
+            "mode": "page_row_multi_chord_supplemental_cell_ocr",
+            "measure_count": len(regions),
+            "selected_measure_count": len(measure_indices),
+            "selected_measure_indices": measure_indices,
+            "selected_measures": selected,
+            "rules": [
+                "wide_ocr_token_with_internal_space",
+                "multiple_chord_like_fragments",
+                "right_half_chord_like_fragment",
+            ],
+        },
+    )
+
+
 def build_chart_measure_regions(rows: list[Any]) -> list[ChartMeasureRegion]:
     regions: list[ChartMeasureRegion] = []
     measure_index = 1
@@ -205,6 +288,48 @@ def _suspicion_reasons(
         reasons.append("repeat_symbol_with_chord_candidate")
 
     return reasons
+
+
+def _multi_chord_reasons(
+    evidence: _MeasureEvidence,
+    *,
+    raw_tokens: list[OCRToken],
+) -> list[str]:
+    reasons: list[str] = []
+    measure_width = max(1.0, evidence.region.bbox[2] - evidence.region.bbox[0])
+
+    if any(
+        len(token.text.split()) > 1
+        and (token.bbox[2] - token.bbox[0]) >= measure_width * 0.42
+        for token in raw_tokens
+    ):
+        reasons.append("wide_ocr_token_with_internal_space")
+
+    chord_like_centers = [
+        _relative_center_x(fragment["bbox"], evidence.region)
+        for fragment in evidence.chord_like_fragments
+    ]
+    if (
+        len(chord_like_centers) >= 2
+        and max(chord_like_centers) - min(chord_like_centers) >= 0.32
+    ):
+        reasons.append("multiple_chord_like_fragments")
+
+    if any(center >= 0.55 for center in chord_like_centers):
+        reasons.append("right_half_chord_like_fragment")
+
+    return reasons
+
+
+def _relative_center_x(
+    bbox: object,
+    region: ChartMeasureRegion,
+) -> float:
+    if not isinstance(bbox, list | tuple) or len(bbox) != 4:
+        return 0.0
+    measure_width = max(1.0, region.bbox[2] - region.bbox[0])
+    center_x = (float(bbox[0]) + float(bbox[2])) / 2.0
+    return (center_x - region.bbox[0]) / measure_width
 
 
 def _candidate_norms_by_source(
@@ -335,7 +460,7 @@ def _is_chord_like_fragment(text: str) -> bool:
     compact = _compact_fragment(text)
     if len(compact) > 16:
         return False
-    if re.search(r"[A-Ga-g]", compact) and re.search(r"[#b0-9mM+\-]", compact):
+    if re.search(r"[A-Ga-g]", compact) and re.search(r"[#b0-9zZmM+\-]", compact):
         return True
     return _is_suffix_like_fragment(compact)
 

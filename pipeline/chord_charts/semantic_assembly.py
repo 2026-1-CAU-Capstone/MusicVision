@@ -19,6 +19,10 @@ from pipeline.chord_charts.visual_suffix import (
     suffix_has_triangle as visual_suffix_has_triangle,
 )
 
+ROOT_REGION_NAMES = {"root", "root_wide"}
+ACCIDENTAL_REGION_NAMES = {"root_accidental", "root_accidental_wide"}
+SUFFIX_REGION_NAMES = {"suffix_lower_right", "suffix_wide"}
+
 
 @dataclass(frozen=True)
 class SemanticAssemblyResult:
@@ -61,35 +65,35 @@ def assemble_semantic_chord_tokens(
             )
             continue
 
-        roots = sorted(
+        measure_width = _measure_width(measure_tokens)
+        roots = _deduplicate_root_candidates(
             [
                 candidate
                 for candidate in (
                     _root_candidate(token)
                     for token in measure_tokens
-                    if token.region == "root"
+                    if token.region in ROOT_REGION_NAMES
                 )
                 if candidate is not None
             ],
-            key=lambda candidate: candidate.token.cx,
+            measure_width=measure_width,
         )
         if not roots:
             continue
 
-        measure_width = _measure_width(measure_tokens)
         for index, root in enumerate(roots):
             next_root_x = roots[index + 1].token.cx if index + 1 < len(roots) else None
             suffix_candidates = [
                 token
                 for token in measure_tokens
-                if token.region == "suffix_lower_right"
+                if token.region in SUFFIX_REGION_NAMES
             ]
             accidental_token = _nearest_related_token(
                 root.token,
                 [
                     token
                     for token in measure_tokens
-                    if token.region == "root_accidental"
+                    if token.region in ACCIDENTAL_REGION_NAMES
                     and _accidental_from_token(token.text) is not None
                 ],
                 max_distance=max(40.0, measure_width * 0.18),
@@ -100,7 +104,13 @@ def assemble_semantic_chord_tokens(
                 [
                     token
                     for token in suffix_candidates
-                    if _body_from_suffix_token(token, image=image) is not None
+                    if _body_from_suffix_token(
+                        token,
+                        image=image,
+                        root=root,
+                        accidental_token=accidental_token,
+                    )
+                    is not None
                 ],
                 max_distance=max(95.0, measure_width * 0.48),
                 next_root_x=next_root_x,
@@ -109,13 +119,20 @@ def assemble_semantic_chord_tokens(
             if accidental is None and accidental_token is not None:
                 accidental = _accidental_from_token(accidental_token.text)
 
-            suffix_body = _combine_suffix_token_bodies(suffix_tokens, image=image)
+            suffix_body = _combine_suffix_token_bodies(
+                suffix_tokens,
+                image=image,
+                root=root,
+                accidental_token=accidental_token,
+            )
             if suffix_body is None and _has_related_invalid_suffix(
                 root.token,
                 suffix_candidates,
                 max_distance=max(95.0, measure_width * 0.48),
                 next_root_x=next_root_x,
                 image=image,
+                root=root,
+                accidental_token=accidental_token,
             ):
                 diagnostics.append(
                     _diagnostic(
@@ -174,7 +191,13 @@ def assemble_semantic_chord_tokens(
                 )
             )
 
-    assembled_tokens.sort(key=lambda token: (token.bbox[1], token.bbox[0]))
+    assembled_tokens.sort(
+        key=lambda token: (
+            token.measure_index or 0,
+            token.bbox[0],
+            token.bbox[1],
+        )
+    )
     return SemanticAssemblyResult(tokens=assembled_tokens, diagnostics=diagnostics)
 
 
@@ -200,6 +223,42 @@ def _root_candidate(token: OCRToken) -> _RootCandidate | None:
     )
 
 
+def _deduplicate_root_candidates(
+    roots: list[_RootCandidate],
+    *,
+    measure_width: float,
+) -> list[_RootCandidate]:
+    if len(roots) < 2:
+        return sorted(roots, key=lambda candidate: candidate.token.cx)
+
+    threshold = max(42.0, measure_width * 0.12)
+    groups: list[list[_RootCandidate]] = []
+    for root in sorted(roots, key=lambda candidate: candidate.token.cx):
+        if not groups or abs(root.token.cx - _root_group_center(groups[-1])) > threshold:
+            groups.append([root])
+        else:
+            groups[-1].append(root)
+
+    return [
+        max(group, key=_root_candidate_score)
+        for group in groups
+    ]
+
+
+def _root_group_center(group: list[_RootCandidate]) -> float:
+    return float(np.mean([root.token.cx for root in group]))
+
+
+def _root_candidate_score(root: _RootCandidate) -> float:
+    confidence = float(root.token.confidence or 0.0)
+    score = confidence * 3.0
+    if root.token.region == "root":
+        score += 1.5
+    if len(re.sub(r"\s+", "", root.token.text or "")) == 1:
+        score += 0.3
+    return score
+
+
 def _body_from_parsed(parsed: ParsedChord) -> str:
     main = parsed.text_norm.split("/", 1)[0]
     prefix = f"{parsed.root}{parsed.accidental or ''}"
@@ -212,11 +271,13 @@ def _accidental_from_token(text: str | None) -> str | None:
     compact = re.sub(r"\s+", "", text or "")
     if not compact:
         return None
-    if any(char in compact for char in "#\u266f\ue262\ue10c"):
-        return "#"
-    if any(char in compact for char in "bBvVhHpPnN6"):
+    has_sharp = any(char in compact for char in "#\u266f\ue262\ue10c")
+    has_flat = any(char in compact for char in "bBvVhHpPnN6\u266d\ue260\ue10d")
+    if has_sharp and has_flat:
         return "b"
-    if any(char in compact for char in "\u266d\ue260\ue10d"):
+    if has_sharp:
+        return "#"
+    if has_flat:
         return "b"
     return None
 
@@ -305,8 +366,17 @@ def _repair_numeric_flat_thirteen_suffix(text: str) -> str | None:
     return "7b13"
 
 
-def _body_from_suffix_token(token: OCRToken, *, image: np.ndarray | None) -> str | None:
+def _body_from_suffix_token(
+    token: OCRToken,
+    *,
+    image: np.ndarray | None,
+    root: _RootCandidate | None = None,
+    accidental_token: OCRToken | None = None,
+) -> str | None:
     compact = re.sub(r"\s+", "", token.text or "").strip(".,;:!|[](){}")
+    if _wide_suffix_accidental_prefix_is_context(compact, token, accidental_token):
+        return "7"
+
     if image is not None:
         visual_text = normalize_suffix_ocr_text(
             token.text or "",
@@ -332,6 +402,31 @@ def _body_from_suffix_token(token: OCRToken, *, image: np.ndarray | None) -> str
         return "7"
 
     return _body_from_suffix_text(token.text)
+
+
+def _wide_suffix_accidental_prefix_is_context(
+    compact: str,
+    token: OCRToken,
+    accidental_token: OCRToken | None,
+) -> bool:
+    if token.region != "suffix_wide" or accidental_token is None:
+        return False
+    if _accidental_from_token(accidental_token.text) is None:
+        return False
+    return compact in {
+        "07",
+        "0z",
+        "0Z",
+        "O7",
+        "Oz",
+        "o7",
+        "oz",
+        "67",
+        "6z",
+        "6Z",
+        "b7",
+        "B7",
+    }
 
 
 def _suffix_text_can_be_triangle(compact: str) -> bool:
@@ -402,12 +497,28 @@ def _combine_suffix_token_bodies(
     tokens: list[OCRToken],
     *,
     image: np.ndarray | None,
+    root: _RootCandidate | None = None,
+    accidental_token: OCRToken | None = None,
 ) -> str | None:
-    bodies = [
-        body
-        for body in (_body_from_suffix_token(token, image=image) for token in tokens)
-        if body is not None
+    body_records = [
+        (token, body)
+        for token in tokens
+        if (
+            body := _body_from_suffix_token(
+                token,
+                image=image,
+                root=root,
+                accidental_token=accidental_token,
+            )
+        )
+        is not None
     ]
+    precise_bodies = [
+        body
+        for token, body in body_records
+        if token.region == "suffix_lower_right"
+    ]
+    bodies = precise_bodies or [body for _token, body in body_records]
     if not bodies:
         return None
 
@@ -439,6 +550,8 @@ def _has_related_invalid_suffix(
     max_distance: float,
     next_root_x: float | None,
     image: np.ndarray | None,
+    root: _RootCandidate | None = None,
+    accidental_token: OCRToken | None = None,
 ) -> bool:
     for token in candidates:
         if token.cx < root_token.cx - 16.0:
@@ -447,7 +560,15 @@ def _has_related_invalid_suffix(
             continue
         if abs(token.cx - root_token.cx) > max_distance:
             continue
-        if _body_from_suffix_token(token, image=image) is None:
+        if (
+            _body_from_suffix_token(
+                token,
+                image=image,
+                root=root,
+                accidental_token=accidental_token,
+            )
+            is None
+        ):
             return True
     return False
 

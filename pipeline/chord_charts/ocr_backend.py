@@ -11,16 +11,23 @@ from pipeline.chords.easyocr_backend import _get_reader
 from pipeline.chords.ocr_common import preprocess_for_ocr
 
 
-SEMANTIC_CHART_CELL_REGION_NAMES = (
+CORE_SEMANTIC_CHART_CELL_REGION_NAMES = (
     "root",
     "root_accidental",
     "suffix_lower_right",
 )
+MULTI_CHORD_CHART_CELL_REGION_NAMES = (
+    "root_wide",
+    "root_accidental_wide",
+    "suffix_wide",
+)
+SEMANTIC_CHART_CELL_REGION_NAMES = CORE_SEMANTIC_CHART_CELL_REGION_NAMES
 CHART_ROOT_OCR_ALLOWLIST = "ABCDEFG"
 CHART_ACCIDENTAL_OCR_ALLOWLIST = (
     "b#vVhHpPnN6"
     "\u266d\u266f\ue260\ue262\ue10d\ue10c"
 )
+CHART_WIDE_ACCIDENTAL_OCR_ALLOWLIST = "bB#\u266d\u266f\ue260\ue262\ue10d\ue10c"
 CHART_SUFFIX_OCR_ALLOWLIST = (
     "ABCDEFGabcdefgijlnorstuxmM0123456789#b()/+-_ "
     "\u00b0\u00f8\u25b3\u2206\u0394\ue260\ue262\ue10d\ue10c"
@@ -29,6 +36,9 @@ CHART_SEMANTIC_REGION_ALLOWLISTS = {
     "root": CHART_ROOT_OCR_ALLOWLIST,
     "root_accidental": CHART_ACCIDENTAL_OCR_ALLOWLIST,
     "suffix_lower_right": CHART_SUFFIX_OCR_ALLOWLIST,
+    "root_wide": CHART_ROOT_OCR_ALLOWLIST,
+    "root_accidental_wide": CHART_WIDE_ACCIDENTAL_OCR_ALLOWLIST,
+    "suffix_wide": CHART_SUFFIX_OCR_ALLOWLIST,
 }
 
 
@@ -501,6 +511,9 @@ def _cell_ocr_regions() -> list[tuple[str, float, float, float, float]]:
         ("root", 0.0, 0.28, 0.05, 0.77),
         ("root_accidental", 0.16, 0.33, 0.0, 0.50),
         ("suffix_lower_right", 0.20, 0.55, 0.34, 0.76),
+        ("root_wide", 0.0, 1.0, 0.05, 0.77),
+        ("root_accidental_wide", 0.0, 1.0, 0.0, 0.42),
+        ("suffix_wide", 0.0, 1.0, 0.34, 0.76),
         ("slash_bass_below_root", 0.0, 0.64, 0.54, 1.0),
     ]
 

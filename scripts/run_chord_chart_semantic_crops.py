@@ -15,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from pipeline.chord_charts.ocr_backend import (
     CHART_SEMANTIC_REGION_ALLOWLISTS,
+    MULTI_CHORD_CHART_CELL_REGION_NAMES,
     SEMANTIC_CHART_CELL_REGION_NAMES,
     _cell_ocr_regions,
     chart_cell_ocr_region_boxes,
@@ -25,6 +26,7 @@ from pipeline.chord_charts.overlay import (
     write_chord_chart_ocr_debug_overlay,
     write_chord_chart_overlay,
 )
+from pipeline.chord_charts.ocr_strategy import plan_multi_chord_chart_cell_ocr
 from pipeline.chord_charts.parser import detect_chart_grid, parse_chord_chart_image
 from pipeline.chord_charts.public_payload import build_public_chord_chart_payload
 from pipeline.chord_charts.semantic_assembly import assemble_semantic_chord_tokens
@@ -55,10 +57,11 @@ def main() -> None:
     if not rows:
         raise SystemExit("No chord-chart grid was detected.")
 
+    semantic_mode = args.regions.strip() == "semantic"
     region_names = _parse_regions(args.regions)
     measure_indices = _parse_measure_indices(args.measure_indices)
     allowlists = None if args.no_allowlists else CHART_SEMANTIC_REGION_ALLOWLISTS
-    expected_cell_ocr_calls = _count_expected_cell_calls(
+    expected_core_cell_ocr_calls = _count_expected_cell_calls(
         rows,
         region_count=len(region_names),
         measure_indices=measure_indices,
@@ -96,9 +99,36 @@ def main() -> None:
             f"{len(repeat_measure_indices)} measure(s) skipped for semantic chords"
         )
 
+    multi_chord_plan = None
+    supplemental_measure_indices: set[int] = set()
+    if semantic_mode:
+        if page_tokens:
+            multi_chord_plan = plan_multi_chord_chart_cell_ocr(
+                rows=rows,
+                page_tokens=page_tokens,
+                row_tokens=[],
+            )
+            supplemental_measure_indices = set(multi_chord_plan.measure_indices)
+            if measure_indices is not None:
+                supplemental_measure_indices &= set(measure_indices)
+        elif measure_indices is not None:
+            supplemental_measure_indices = set(measure_indices)
+        elif args.no_page_ocr:
+            supplemental_measure_indices = _all_measure_indices(rows)
+
+    expected_supplemental_cell_ocr_calls = _count_expected_cell_calls(
+        rows,
+        region_count=len(MULTI_CHORD_CHART_CELL_REGION_NAMES),
+        measure_indices=supplemental_measure_indices,
+    )
+    expected_cell_ocr_calls = (
+        expected_core_cell_ocr_calls + expected_supplemental_cell_ocr_calls
+    )
     print(
         "running semantic cell OCR: "
-        f"{expected_cell_ocr_calls} calls across {len(region_names)} regions..."
+        f"{expected_cell_ocr_calls} calls "
+        f"({expected_core_cell_ocr_calls} core, "
+        f"{expected_supplemental_cell_ocr_calls} supplemental)..."
     )
     cell_start = time.perf_counter()
     last_progress_print = 0.0
@@ -120,6 +150,22 @@ def main() -> None:
         source="cell_ocr_semantic",
         progress_callback=report_cell_progress,
     )
+    supplemental_cell_tokens = []
+    supplemental_cell_rejects = []
+    if supplemental_measure_indices:
+        supplemental_cell_tokens, supplemental_cell_rejects = (
+            extract_chart_cell_ocr_tokens(
+                image,
+                rows,
+                measure_indices=supplemental_measure_indices,
+                region_names=MULTI_CHORD_CHART_CELL_REGION_NAMES,
+                region_allowlists=allowlists,
+                source="cell_ocr_semantic",
+                progress_callback=report_cell_progress,
+            )
+        )
+        cell_tokens.extend(supplemental_cell_tokens)
+        cell_rejects.extend(supplemental_cell_rejects)
     cell_runtime = time.perf_counter() - cell_start
     print(
         "semantic cell OCR: "
@@ -156,9 +202,21 @@ def main() -> None:
         "semantic_assembled_tokens": len(assembly.tokens),
         "repeat_priority_measure_indices": sorted(repeat_measure_indices),
         "semantic_cell_region_names": list(region_names),
-        "semantic_cell_ocr_calls": expected_cell_ocr_calls,
+        "semantic_cell_ocr_calls": expected_core_cell_ocr_calls,
         "semantic_cell_measure_indices": (
             sorted(measure_indices) if measure_indices is not None else "all"
+        ),
+        "multi_chord_supplemental_region_names": list(
+            MULTI_CHORD_CHART_CELL_REGION_NAMES
+        ),
+        "multi_chord_supplemental_measure_indices": sorted(
+            supplemental_measure_indices
+        ),
+        "multi_chord_supplemental_ocr_calls": expected_supplemental_cell_ocr_calls,
+        "multi_chord_supplemental_tokens": len(supplemental_cell_tokens),
+        "multi_chord_supplemental_rejects": len(supplemental_cell_rejects),
+        "multi_chord_supplemental_plan": (
+            multi_chord_plan.diagnostics if multi_chord_plan is not None else None
         ),
         "region_allowlists_enabled": allowlists is not None,
         "region_allowlists": {
@@ -187,6 +245,16 @@ def main() -> None:
             source="cell_ocr_semantic",
         )
     )
+    if supplemental_measure_indices:
+        scan_regions.extend(
+            chart_cell_ocr_region_boxes(
+                image,
+                rows,
+                measure_indices=supplemental_measure_indices,
+                region_names=MULTI_CHORD_CHART_CELL_REGION_NAMES,
+                source="cell_ocr_semantic",
+            )
+        )
 
     overlay_path = write_chord_chart_overlay(
         image=image,
@@ -350,6 +418,17 @@ def _count_expected_cell_calls(
                 count += region_count
             measure_index += 1
     return count
+
+
+def _all_measure_indices(rows: list[Any]) -> set[int]:
+    indices: set[int] = set()
+    measure_index = 1
+    for row in rows:
+        boundaries = getattr(row, "boundaries", [])
+        for _left, _right in zip(boundaries, boundaries[1:]):
+            indices.add(measure_index)
+            measure_index += 1
+    return indices
 
 
 def _repeat_measure_indices_from_payload(payload: dict[str, Any]) -> set[int]:

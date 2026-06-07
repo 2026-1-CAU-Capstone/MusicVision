@@ -4,6 +4,8 @@ from pathlib import Path
 
 from pipeline.chord_charts.ocr_backend import (
     CHART_SEMANTIC_REGION_ALLOWLISTS,
+    MULTI_CHORD_CHART_CELL_REGION_NAMES,
+    SEMANTIC_CHART_CELL_REGION_NAMES,
     chart_cell_ocr_region_boxes,
     chart_row_ocr_region_boxes,
     extract_chart_cell_ocr_tokens,
@@ -14,7 +16,10 @@ from pipeline.chord_charts.overlay import (
     write_chord_chart_ocr_debug_overlay,
     write_chord_chart_overlay,
 )
-from pipeline.chord_charts.ocr_strategy import plan_selective_chart_cell_ocr
+from pipeline.chord_charts.ocr_strategy import (
+    plan_multi_chord_chart_cell_ocr,
+    plan_selective_chart_cell_ocr,
+)
 from pipeline.chord_charts.parser import detect_chart_grid, parse_chord_chart_image
 from pipeline.chord_charts.public_payload import build_public_chord_chart_payload
 from pipeline.chord_charts.semantic_assembly import assemble_semantic_chord_tokens
@@ -319,12 +324,16 @@ def run_chord_chart_pipeline(
         page_tokens=page_tokens,
         row_tokens=row_tokens,
     )
-    selective_region_names = (
-        "root",
-        "root_accidental",
-        "suffix_lower_right",
+    multi_chord_plan = plan_multi_chord_chart_cell_ocr(
+        rows=rows,
+        page_tokens=page_tokens,
+        row_tokens=row_tokens,
     )
+    selective_region_names = SEMANTIC_CHART_CELL_REGION_NAMES
     selective_steps = len(selective_plan.measure_indices) * len(selective_region_names)
+    multi_chord_steps = (
+        len(multi_chord_plan.measure_indices) * len(MULTI_CHORD_CHART_CELL_REGION_NAMES)
+    )
     _report_progress(
         progress_callback,
         progress=60,
@@ -348,6 +357,28 @@ def run_chord_chart_pipeline(
             message_prefix="Reading suspicious chart cells",
         ),
     )
+    core_cell_token_count = len(cell_tokens)
+    core_cell_reject_count = len(cell_rejects)
+    multi_chord_tokens = []
+    multi_chord_rejects = []
+    if multi_chord_plan.measure_indices:
+        multi_chord_tokens, multi_chord_rejects = extract_chart_cell_ocr_tokens(
+            image,
+            rows,
+            measure_indices=set(multi_chord_plan.measure_indices),
+            region_names=MULTI_CHORD_CHART_CELL_REGION_NAMES,
+            region_allowlists=CHART_SEMANTIC_REGION_ALLOWLISTS,
+            source="cell_ocr_targeted",
+            progress_callback=_chart_ocr_progress_callback(
+                progress_callback,
+                start_progress=60,
+                progress_span=20,
+                stage="selective_cell_ocr",
+                message_prefix="Reading multi-chord chart cells",
+            ),
+        )
+        cell_tokens.extend(multi_chord_tokens)
+        cell_rejects.extend(multi_chord_rejects)
     semantic_assembly = assemble_semantic_chord_tokens(
         cell_tokens,
         image=image,
@@ -372,11 +403,21 @@ def run_chord_chart_pipeline(
         "page_rejects": len(page_rejects),
         "row_tokens": len(row_tokens),
         "row_rejects": len(row_rejects),
-        "targeted_cell_tokens": len(cell_tokens),
-        "targeted_cell_rejects": len(cell_rejects),
+        "targeted_cell_tokens": core_cell_token_count,
+        "targeted_cell_rejects": core_cell_reject_count,
+        "total_cell_tokens": len(cell_tokens),
+        "total_cell_rejects": len(cell_rejects),
         "targeted_semantic_assembled_tokens": len(semantic_assembly.tokens),
         "targeted_cell_region_names": list(selective_region_names),
         "targeted_cell_ocr_calls": selective_steps,
+        "multi_chord_supplemental_region_names": list(
+            MULTI_CHORD_CHART_CELL_REGION_NAMES
+        ),
+        "multi_chord_supplemental_measure_indices": multi_chord_plan.measure_indices,
+        "multi_chord_supplemental_ocr_calls": multi_chord_steps,
+        "multi_chord_supplemental_tokens": len(multi_chord_tokens),
+        "multi_chord_supplemental_rejects": len(multi_chord_rejects),
+        "multi_chord_supplemental_plan": multi_chord_plan.diagnostics,
         "region_allowlists_enabled": True,
         "semantic_assembly": semantic_assembly.diagnostics,
     }
@@ -392,6 +433,13 @@ def run_chord_chart_pipeline(
             rows,
             measure_indices=set(selective_plan.measure_indices),
             region_names=selective_region_names,
+            source="cell_ocr_targeted",
+        ),
+        *chart_cell_ocr_region_boxes(
+            image,
+            rows,
+            measure_indices=set(multi_chord_plan.measure_indices),
+            region_names=MULTI_CHORD_CHART_CELL_REGION_NAMES,
             source="cell_ocr_targeted",
         ),
     ]

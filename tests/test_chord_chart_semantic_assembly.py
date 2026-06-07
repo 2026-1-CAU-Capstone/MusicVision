@@ -106,21 +106,21 @@ def test_semantic_assembly_combines_split_seventh_and_sharp_suffix() -> None:
     assert [fragment["text"] for fragment in suffix_fragments] == ["7", "#5"]
 
 
-def test_semantic_assembly_uses_wide_regions_for_second_flat_chord() -> None:
+def test_semantic_assembly_uses_root_anchor_local_regions_for_second_flat_chord() -> None:
     result = assemble_semantic_chord_tokens(
         [
             _token("G", (10.0, 10.0, 30.0, 40.0), region="root"),
             _token("-7", (34.0, 24.0, 58.0, 42.0), region="suffix_lower_right"),
-            _token("G", (120.0, 10.0, 140.0, 40.0), region="root_wide"),
-            _token("#b", (138.0, 8.0, 150.0, 24.0), region="root_accidental_wide"),
-            _token("07", (146.0, 24.0, 170.0, 42.0), region="suffix_wide"),
+            _token("G", (120.0, 10.0, 140.0, 40.0), region="root"),
+            _token("#b", (138.0, 8.0, 150.0, 24.0), region="root_accidental"),
+            _token("7", (146.0, 24.0, 170.0, 42.0), region="suffix_lower_right"),
         ]
     )
 
     assert [token.text for token in result.tokens] == ["Gm7", "Gb7"]
 
 
-def test_semantic_assembly_deduplicates_wide_root_near_precise_root() -> None:
+def test_semantic_assembly_ignores_full_measure_wide_regions() -> None:
     result = assemble_semantic_chord_tokens(
         [
             _token("F", (10.0, 10.0, 30.0, 40.0), region="root"),
@@ -131,7 +131,7 @@ def test_semantic_assembly_deduplicates_wide_root_near_precise_root() -> None:
         ]
     )
 
-    assert [token.text for token in result.tokens] == ["Fm7", "E7"]
+    assert [token.text for token in result.tokens] == ["Fm7"]
 
 
 def test_semantic_assembly_prefers_precise_suffix_over_wide_suffix() -> None:

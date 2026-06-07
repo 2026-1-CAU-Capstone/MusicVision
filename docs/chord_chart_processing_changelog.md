@@ -13,6 +13,141 @@ MusicXML, and has to understand chart-flow notation as well as chord symbols.
 - `docs/chord_chart_processing_changelog.md` tracks this chord-chart branch.
 - `docs/chord_chart_processing_performance.md` tracks local runtime measurements.
 
+## 2026-06-07 - Glyph-specific semantic OCR and root-anchor multi-chord probing
+
+### OCR-level glyph normalization trials
+
+The Autumn Leaves and Cherokee charts showed repeated OCR confusions that were
+not isolated spelling mistakes. The pipeline now handles those cases at the
+OCR-crop boundary or in semantic assembly diagnostics instead of relying only on
+late chord-string cleanup.
+
+Observed glyph cases and current handling:
+
+- A minor dash before `7` or `6` can be read as another `7`, producing `77` or
+  `76`. `suffix_lower_right` crops now run visual suffix normalization before
+  semantic assembly, so a crop with visible horizontal dash evidence can emit
+  `-7` or `-6` before chord grammar sees the token.
+- A triangle major-seventh mark, diminished circle, and half-diminished slashed
+  circle can all look like OCR text `0`, `07`, or `47`. The visual suffix helper
+  checks the suffix crop image for triangle, circle, and slash evidence so `07`
+  can become `maj7`, `dim7`, or `m7b5` based on pixels instead of a single text
+  rule.
+- Numeric flat and sharp confusions are repaired only when the text pattern is
+  specific enough: `719` becomes `7b9`, `7113` becomes `7b13`, and `745`
+  becomes `7#5`.
+- Root OCR is constrained to root letters only. The root crop can still return
+  spillover text such as `Ba`, `BG`, or `Gl`, but semantic assembly only uses the
+  first root letter from the root crop. Accidentals and suffixes must come from
+  their own crops.
+
+The design boundary is: root crops vote on root letters, accidental crops vote
+on accidentals, and suffix crops vote on suffix bodies. This prevents a root
+crop from deciding accidental or suffix content just because the crop includes
+nearby glyphs.
+
+### Full-measure wide OCR trial and replacement
+
+The first multi-chord attempt added full-measure wide semantic regions:
+
+```text
+root_wide
+root_accidental_wide
+suffix_wide
+```
+
+Those regions recovered the second chord in Autumn Leaves measures where page
+OCR had enough evidence to select a suspicious measure. However, Body and Soul
+exposed a structural problem: full-measure root OCR can return merged root text
+such as `DG`, and full-measure suffix OCR can return text from multiple chord
+symbols. Treating those wide tokens as final semantic assembly evidence can
+create false chords.
+
+The current approach keeps the wide idea only as a probe:
+
+```text
+root_anchor_scan
+```
+
+`root_anchor_scan` uses root-only OCR across selected multi-chord measures. Its
+output is not passed directly to final chord assembly. Instead, merged root-only
+tokens such as `DG` are split into likely root anchors, and those anchor centers
+define local OCR boxes. Final chord assembly receives normal semantic regions
+from those local boxes:
+
+```text
+root
+root_accidental
+suffix_lower_right
+```
+
+This changes the multi-chord model from:
+
+```text
+full measure OCR -> assembled chord
+```
+
+to:
+
+```text
+full measure root probe -> root anchors -> local semantic OCR -> assembled chord
+```
+
+The important accuracy rule is that `root_wide`, `root_accidental_wide`, and
+`suffix_wide` are no longer final semantic assembly sources. They remain useful
+for debug experiments, but the production and local semantic runner paths use
+anchor-local normal regions for multi-chord recovery.
+
+Reviewed Autumn Leaves run:
+
+```text
+storage/jobs/chart-debug-autumn-leaves-root-anchor-suffix-20260607
+```
+
+This run selected measures 19 and 20 for multi-chord probing, produced four
+root anchors, ran twelve anchor-local semantic OCR boxes, and recovered:
+
+```text
+measure 19: Gm7, Gb7
+measure 20: Fm7, E7
+```
+
+An earlier root-anchor run without plan-derived hints over-detected six anchors
+from the same two measures. The false anchors came from root-only OCR text such
+as `GF` and `CA`. The revised implementation uses page/row multi-chord evidence
+as anchor hints and lets root-anchor OCR refine only nearby matching root
+letters. That prevents unrelated full-measure root-only letters from becoming
+final chord starts.
+
+### Low-resolution chart upscaling trial
+
+Body and Soul originally produced almost no chords because grid detection found
+only one measure cell near the bottom-right of the page. Diagnostic component
+checks showed that the native `599x720` image had 1-2 pixel barlines that were
+lost by the existing vertical-line morphology. The chart path now upscales
+small chord-chart images in memory before grid detection and OCR. For Body and
+Soul, the image becomes `1198x1440`, which restores the visible barline
+components without changing the barline threshold or crop ratios.
+
+Reviewed Body and Soul run:
+
+```text
+storage/jobs/chart-debug-body-and-soul-root-anchor-20260607
+```
+
+This run detected 25 measures and 34 public chord events after upscaling. It no
+longer lets full-measure wide tokens such as `DG` assemble directly into final
+chords. The remaining issue is anchor over-selection: 15 measures were selected
+for multi-chord probing, producing 37 anchors and 100 anchor-local OCR boxes.
+That result is usable as a diagnostic run, but not yet a finished multi-chord
+selection strategy for dense charts.
+
+Current next accuracy step: prune root-anchor hints before local OCR. The
+highest-priority pruning checks are low-confidence hint filtering, rejecting
+anchors whose only source is a weak noisy page token, and using the measure's
+existing clean page/semantic chord when the extra anchor would add an unsupported
+third or fourth chord.
+
 ## 2026-06-06 - Public chart contract and semantic crop OCR
 
 ### Public contract split

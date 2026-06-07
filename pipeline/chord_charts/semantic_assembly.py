@@ -19,9 +19,9 @@ from pipeline.chord_charts.visual_suffix import (
     suffix_has_triangle as visual_suffix_has_triangle,
 )
 
-ROOT_REGION_NAMES = {"root", "root_wide"}
-ACCIDENTAL_REGION_NAMES = {"root_accidental", "root_accidental_wide"}
-SUFFIX_REGION_NAMES = {"suffix_lower_right", "suffix_wide"}
+ROOT_REGION_NAMES = {"root"}
+ACCIDENTAL_REGION_NAMES = {"root_accidental"}
+SUFFIX_REGION_NAMES = {"suffix_lower_right"}
 
 
 @dataclass(frozen=True)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 import textwrap
 from typing import Any
 
@@ -118,20 +119,10 @@ def render_chord_chart_ocr_debug_overlay(
     scan_regions: list[dict[str, Any]],
 ) -> np.ndarray:
     marked_image = image.copy()
-    for region in scan_regions:
-        _draw_box(
-            marked_image,
-            region.get("bbox"),
-            _scan_region_colour(region),
-            thickness=2,
-        )
-
-    _draw_final_measure_boxes(marked_image, pages, draw_labels=True)
-    _draw_ocr_token_labels(
+    _draw_final_measure_boxes(marked_image, pages, draw_labels=False, draw_chords=False)
+    _draw_debug_value_labels(
         marked_image,
         chart_ocr=chart_ocr,
-        ocr_tokens=ocr_tokens,
-        ocr_rejects=ocr_rejects,
     )
     _draw_debug_legend(marked_image)
     return marked_image
@@ -142,6 +133,7 @@ def _draw_final_measure_boxes(
     pages: list[dict[str, Any]],
     *,
     draw_labels: bool = False,
+    draw_chords: bool = True,
 ) -> None:
     for page in pages:
         for system in page.get("systems") or []:
@@ -155,53 +147,179 @@ def _draw_final_measure_boxes(
                         CHORD_COLOUR,
                         position="inside",
                     )
-                for chord in measure.get("chords") or []:
-                    _draw_box(image, chord.get("bbox"), CHORD_COLOUR, thickness=3)
+                if draw_chords:
+                    for chord in measure.get("chords") or []:
+                        _draw_box(image, chord.get("bbox"), CHORD_COLOUR, thickness=3)
 
 
-def _draw_ocr_token_labels(
+def _draw_debug_value_labels(
     image: np.ndarray,
     *,
     chart_ocr: dict[str, Any],
-    ocr_tokens: list[Any],
-    ocr_rejects: list[dict[str, Any]],
 ) -> None:
-    accepted_lookup = _token_lookup(chart_ocr.get("accepted_tokens") or [])
-    unassigned_lookup = _token_lookup(chart_ocr.get("unassigned_tokens") or [])
-    for token in ocr_tokens:
-        token_dict = _token_to_dict(token)
-        key = _token_key(token_dict)
-        accepted = accepted_lookup.get(key)
-        unassigned = unassigned_lookup.get(key)
-        colour = OCR_ACCEPTED_COLOUR if accepted is not None else PANEL_MUTED_COLOUR
-        _draw_box(image, token_dict.get("bbox"), colour, thickness=2)
-        _draw_label_box(
-            image,
-            _ocr_token_display_label(
-                token_dict,
-                accepted=accepted,
-                unassigned=unassigned,
-            ),
-            token_dict.get("bbox"),
-            colour,
-            position="above",
-        )
+    for entry in _accepted_semantic_assembly_entries(chart_ocr):
+        fragments = _selected_semantic_fragments(entry)
+        chord_bbox = _union_debug_fragment_bbox(fragments)
+        if chord_bbox is not None:
+            _draw_box(image, chord_bbox, CHORD_COLOUR, thickness=3)
+            _draw_label_box(
+                image,
+                _truncate_label(str(entry.get("text") or ""), limit=18),
+                chord_bbox,
+                CHORD_COLOUR,
+                position="left_top",
+            )
 
-    for reject in ocr_rejects:
-        _draw_box(image, reject.get("bbox"), OCR_REJECTED_COLOUR, thickness=2)
-        _draw_label_box(
-            image,
-            _rejected_token_display_label(reject),
-            reject.get("bbox"),
-            OCR_REJECTED_COLOUR,
-            position="below",
-        )
+        for fragment in _semantic_fragments_by_role(fragments, "suffix"):
+            _draw_box(image, fragment.get("bbox"), SCAN_SUFFIX_COLOUR, thickness=2)
+            _draw_label_box(
+                image,
+                _truncate_label(str(fragment.get("text") or ""), limit=12),
+                fragment.get("bbox"),
+                SCAN_SUFFIX_COLOUR,
+                position="below",
+            )
+
+        for fragment in _semantic_fragments_by_role(fragments, "accidental"):
+            _draw_box(image, fragment.get("bbox"), SCAN_ACCIDENTAL_COLOUR, thickness=2)
+            _draw_label_box(
+                image,
+                _truncate_label(str(fragment.get("text") or ""), limit=12),
+                fragment.get("bbox"),
+                SCAN_ACCIDENTAL_COLOUR,
+                position="right",
+            )
+
+
+def _accepted_semantic_assembly_entries(chart_ocr: dict[str, Any]) -> list[dict[str, Any]]:
+    strategy = chart_ocr.get("strategy")
+    if not isinstance(strategy, dict):
+        return []
+    entries = strategy.get("semantic_assembly")
+    if not isinstance(entries, list):
+        return []
+    return [
+        entry
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("status") == "accepted"
+    ]
+
+
+def _selected_semantic_fragments(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    fragments = [
+        fragment
+        for fragment in entry.get("fragments") or []
+        if isinstance(fragment, dict)
+    ]
+    roots = _semantic_fragments_by_role(fragments, "root")
+    accidentals = _dedupe_semantic_fragments(
+        _semantic_fragments_by_role(fragments, "accidental")
+    )
+    suffixes = _dedupe_semantic_fragments(
+        [
+            fragment
+            for fragment in _semantic_fragments_by_role(fragments, "suffix")
+            if _visible_semantic_suffix_fragment(fragment)
+        ]
+    )
+    return [*roots, *accidentals, *suffixes]
+
+
+def _semantic_fragments_by_role(
+    fragments: list[dict[str, Any]],
+    role: str,
+) -> list[dict[str, Any]]:
+    return [fragment for fragment in fragments if fragment.get("role") == role]
+
+
+def _visible_semantic_suffix_fragment(fragment: dict[str, Any]) -> bool:
+    compact = re.sub(r"\s+", "", str(fragment.get("text") or ""))
+    if not compact:
+        return False
+    return re.fullmatch(r"[A-Ga-g]+", compact) is None
+
+
+def _dedupe_semantic_fragments(
+    fragments: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    for fragment in fragments:
+        duplicate_index = _duplicate_semantic_fragment_index(fragment, deduped)
+        if duplicate_index is None:
+            deduped.append(fragment)
+            continue
+        if _semantic_fragment_score(fragment) > _semantic_fragment_score(
+            deduped[duplicate_index]
+        ):
+            deduped[duplicate_index] = fragment
+    return deduped
+
+
+def _duplicate_semantic_fragment_index(
+    fragment: dict[str, Any],
+    candidates: list[dict[str, Any]],
+) -> int | None:
+    for index, candidate in enumerate(candidates):
+        if fragment.get("role") != candidate.get("role"):
+            continue
+        if str(fragment.get("text") or "") != str(candidate.get("text") or ""):
+            continue
+        if _bbox_overlap_ratio(fragment.get("bbox"), candidate.get("bbox")) >= 0.45:
+            return index
+    return None
+
+
+def _semantic_fragment_score(fragment: dict[str, Any]) -> tuple[float, float]:
+    confidence = fragment.get("confidence")
+    confidence_score = float(confidence) if isinstance(confidence, int | float) else 0.0
+    return confidence_score, -_bbox_area(fragment.get("bbox"))
+
+
+def _bbox_overlap_ratio(first: object, second: object) -> float:
+    if not _valid_bbox(first) or not _valid_bbox(second):
+        return 0.0
+    ax0, ay0, ax1, ay1 = [float(value) for value in first]  # type: ignore[arg-type]
+    bx0, by0, bx1, by1 = [float(value) for value in second]  # type: ignore[arg-type]
+    ix0 = max(ax0, bx0)
+    iy0 = max(ay0, by0)
+    ix1 = min(ax1, bx1)
+    iy1 = min(ay1, by1)
+    if ix1 <= ix0 or iy1 <= iy0:
+        return 0.0
+    intersection = (ix1 - ix0) * (iy1 - iy0)
+    smaller_area = min(_bbox_area(first), _bbox_area(second))
+    if smaller_area <= 0.0:
+        return 0.0
+    return intersection / smaller_area
+
+
+def _bbox_area(bbox: object) -> float:
+    if not _valid_bbox(bbox):
+        return 0.0
+    x0, y0, x1, y1 = [float(value) for value in bbox]  # type: ignore[arg-type]
+    return max(0.0, x1 - x0) * max(0.0, y1 - y0)
+
+
+def _union_debug_fragment_bbox(
+    fragments: list[dict[str, Any]],
+) -> tuple[float, float, float, float] | None:
+    boxes = [fragment.get("bbox") for fragment in fragments]
+    valid_boxes = [box for box in boxes if _valid_bbox(box)]
+    if not valid_boxes:
+        return None
+    return (
+        min(float(box[0]) for box in valid_boxes),  # type: ignore[index]
+        min(float(box[1]) for box in valid_boxes),  # type: ignore[index]
+        max(float(box[2]) for box in valid_boxes),  # type: ignore[index]
+        max(float(box[3]) for box in valid_boxes),  # type: ignore[index]
+    )
 
 
 def _draw_debug_legend(image: np.ndarray) -> None:
     lines = [
-        "scan: grey page, teal row, blue root, purple accidental, orange suffix",
-        "tokens: green accepted/corrected, grey unassigned, red rejected",
+        "green: final chord (semantic chord)",
+        "orange: suffix",
+        "purple: accidental",
     ]
     x = 12
     y = 22
@@ -228,7 +346,10 @@ def _debug_panel_lines(
         _PanelLine("Chord Chart OCR Debug Overlay", thickness=2, scale=0.62),
         _PanelLine("Image labels are boxes only; text is listed here to avoid overlap."),
         _PanelLine(
-            "Legend: grey=page/measure, teal=row scan, blue=root, purple=accidental, orange=suffix, green=OCR hit, red=reject",
+            (
+                "Legend: grey=page/measure, teal=row scan, blue=root/anchor, "
+                "purple=accidental, orange=suffix, green=OCR hit, red=reject"
+            ),
             colour=PANEL_MUTED_COLOUR,
         ),
         _PanelLine(""),
@@ -396,7 +517,7 @@ def _scan_region_colour(region: dict[str, Any]) -> tuple[int, int, int]:
         return SCAN_PAGE_COLOUR
     if name == "row_system":
         return SCAN_ROW_COLOUR
-    if name == "root":
+    if name in {"root", "root_anchor_scan"}:
         return SCAN_ROOT_COLOUR
     if name == "root_accidental":
         return SCAN_ACCIDENTAL_COLOUR
@@ -405,6 +526,13 @@ def _scan_region_colour(region: dict[str, Any]) -> tuple[int, int, int]:
     if name == "slash_bass_below_root":
         return SCAN_SLASH_BASS_COLOUR
     return SCAN_PAGE_COLOUR
+
+
+def _visible_debug_scan_region(region: dict[str, Any]) -> bool:
+    return str(region.get("region") or "") in {
+        "root_accidental",
+        "suffix_lower_right",
+    }
 
 
 def _token_lookup(tokens: list[dict[str, Any]]) -> dict[tuple[Any, ...], dict[str, Any]]:
@@ -604,16 +732,36 @@ def _draw_label_box(
 ) -> None:
     if not text or not _valid_bbox(bbox):
         return
-    x0, y0, _x1, y1 = [int(round(float(value))) for value in bbox]
+    x0, y0, x1, y1 = [int(round(float(value))) for value in bbox]
+    text_width, _text_height = _label_text_size(text)
     if position == "inside":
+        label_x = x0 + 3
         label_y = y0 + 18
     elif position == "below":
+        label_x = x0 + 3
         label_y = y1 + 17
+    elif position == "right":
+        label_x = x1 + 8
+        label_y = int((y0 + y1) / 2)
+    elif position == "left_top":
+        label_x = x0 - text_width - 10
+        label_y = y0 + 17
     else:
+        label_x = x0 + 3
         label_y = y0 - 5
         if label_y < 16:
             label_y = y1 + 17
-    _draw_label_at(image, text, x=x0 + 3, y=label_y, colour=colour)
+    _draw_label_at(image, text, x=label_x, y=label_y, colour=colour)
+
+
+def _label_text_size(text: str) -> tuple[int, int]:
+    (text_width, text_height), _baseline = cv2.getTextSize(
+        text,
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.42,
+        1,
+    )
+    return text_width, text_height
 
 
 def _draw_label_at(

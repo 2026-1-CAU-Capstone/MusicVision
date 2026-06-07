@@ -2,6 +2,7 @@ from pipeline.chord_charts.ocr_backend import OCRToken
 from pipeline.chord_charts.ocr_strategy import (
     plan_multi_chord_chart_cell_ocr,
     plan_selective_chart_cell_ocr,
+    root_anchor_hints_from_plan,
 )
 from pipeline.chord_charts.parser import Boundary, ChartRow
 
@@ -74,6 +75,8 @@ def test_multi_chord_plan_flags_wide_token_with_space() -> None:
     assert plan.measure_indices == [1]
     reasons = plan.diagnostics["selected_measures"][0]["reasons"]
     assert "wide_ocr_token_with_internal_space" in reasons
+    hints = root_anchor_hints_from_plan(plan)
+    assert [hint["root"] for hint in hints] == ["G", "G"]
 
 
 def test_multi_chord_plan_flags_right_half_chord_like_fragment() -> None:
@@ -89,3 +92,5 @@ def test_multi_chord_plan_flags_right_half_chord_like_fragment() -> None:
     assert plan.measure_indices == [1]
     reasons = plan.diagnostics["selected_measures"][0]["reasons"]
     assert "right_half_chord_like_fragment" in reasons
+    hints = root_anchor_hints_from_plan(plan)
+    assert [hint["root"] for hint in hints] == ["F", "E"]

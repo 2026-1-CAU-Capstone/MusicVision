@@ -6,12 +6,16 @@ from pipeline.chord_charts.ocr_backend import (
     CHART_SEMANTIC_REGION_ALLOWLISTS,
     MULTI_CHORD_CHART_CELL_REGION_NAMES,
     SEMANTIC_CHART_CELL_REGION_NAMES,
+    build_root_anchor_candidates,
     chart_cell_ocr_region_boxes,
     chart_row_ocr_region_boxes,
+    chart_root_anchor_local_region_boxes,
     extract_chart_cell_ocr_tokens,
     extract_chart_ocr_tokens,
+    extract_chart_root_anchor_local_ocr_tokens,
     extract_chart_row_ocr_tokens,
 )
+from pipeline.chord_charts.image_preprocessing import upscale_small_chord_chart_image
 from pipeline.chord_charts.overlay import (
     write_chord_chart_ocr_debug_overlay,
     write_chord_chart_overlay,
@@ -19,6 +23,7 @@ from pipeline.chord_charts.overlay import (
 from pipeline.chord_charts.ocr_strategy import (
     plan_multi_chord_chart_cell_ocr,
     plan_selective_chart_cell_ocr,
+    root_anchor_hints_from_plan,
 )
 from pipeline.chord_charts.parser import detect_chart_grid, parse_chord_chart_image
 from pipeline.chord_charts.public_payload import build_public_chord_chart_payload
@@ -286,6 +291,8 @@ def run_chord_chart_pipeline(
         message="Loading preprocessed chord chart image",
     )
     image = load_rgb_image(preprocessed_input_path)
+    image_scale = upscale_small_chord_chart_image(image)
+    image = image_scale.image
     _report_progress(
         progress_callback,
         progress=20,
@@ -331,7 +338,7 @@ def run_chord_chart_pipeline(
     )
     selective_region_names = SEMANTIC_CHART_CELL_REGION_NAMES
     selective_steps = len(selective_plan.measure_indices) * len(selective_region_names)
-    multi_chord_steps = (
+    root_anchor_probe_steps = (
         len(multi_chord_plan.measure_indices) * len(MULTI_CHORD_CHART_CELL_REGION_NAMES)
     )
     _report_progress(
@@ -359,26 +366,66 @@ def run_chord_chart_pipeline(
     )
     core_cell_token_count = len(cell_tokens)
     core_cell_reject_count = len(cell_rejects)
-    multi_chord_tokens = []
-    multi_chord_rejects = []
+    root_anchor_probe_tokens = []
+    root_anchor_probe_rejects = []
+    root_anchor_candidates = []
+    root_anchor_local_tokens = []
+    root_anchor_local_rejects = []
+    root_anchor_local_steps = 0
     if multi_chord_plan.measure_indices:
-        multi_chord_tokens, multi_chord_rejects = extract_chart_cell_ocr_tokens(
+        root_anchor_hints = root_anchor_hints_from_plan(multi_chord_plan)
+        root_anchor_probe_tokens, root_anchor_probe_rejects = extract_chart_cell_ocr_tokens(
             image,
             rows,
             measure_indices=set(multi_chord_plan.measure_indices),
             region_names=MULTI_CHORD_CHART_CELL_REGION_NAMES,
             region_allowlists=CHART_SEMANTIC_REGION_ALLOWLISTS,
-            source="cell_ocr_targeted",
+            source="cell_ocr_root_anchor_probe",
             progress_callback=_chart_ocr_progress_callback(
                 progress_callback,
                 start_progress=60,
                 progress_span=20,
                 stage="selective_cell_ocr",
-                message_prefix="Reading multi-chord chart cells",
+                message_prefix="Reading multi-chord root anchors",
             ),
         )
-        cell_tokens.extend(multi_chord_tokens)
-        cell_rejects.extend(multi_chord_rejects)
+        cell_rejects.extend(root_anchor_probe_rejects)
+        root_anchor_candidates = build_root_anchor_candidates(
+            root_anchor_probe_tokens,
+            image=image,
+            rows=rows,
+            measure_indices=set(multi_chord_plan.measure_indices),
+            anchor_hints=root_anchor_hints,
+        )
+        root_anchor_local_steps = len(
+            chart_root_anchor_local_region_boxes(
+                image,
+                rows,
+                anchor_candidates=root_anchor_candidates,
+                measure_indices=set(multi_chord_plan.measure_indices),
+                source="cell_ocr_root_anchor",
+            )
+        )
+        if root_anchor_local_steps:
+            root_anchor_local_tokens, root_anchor_local_rejects = (
+                extract_chart_root_anchor_local_ocr_tokens(
+                    image,
+                    rows,
+                    anchor_candidates=root_anchor_candidates,
+                    measure_indices=set(multi_chord_plan.measure_indices),
+                    region_allowlists=CHART_SEMANTIC_REGION_ALLOWLISTS,
+                    source="cell_ocr_root_anchor",
+                    progress_callback=_chart_ocr_progress_callback(
+                        progress_callback,
+                        start_progress=60,
+                        progress_span=20,
+                        stage="selective_cell_ocr",
+                        message_prefix="Reading root-anchor chart cells",
+                    ),
+                )
+            )
+            cell_tokens.extend(root_anchor_local_tokens)
+            cell_rejects.extend(root_anchor_local_rejects)
     semantic_assembly = assemble_semantic_chord_tokens(
         cell_tokens,
         image=image,
@@ -414,12 +461,23 @@ def run_chord_chart_pipeline(
             MULTI_CHORD_CHART_CELL_REGION_NAMES
         ),
         "multi_chord_supplemental_measure_indices": multi_chord_plan.measure_indices,
-        "multi_chord_supplemental_ocr_calls": multi_chord_steps,
-        "multi_chord_supplemental_tokens": len(multi_chord_tokens),
-        "multi_chord_supplemental_rejects": len(multi_chord_rejects),
+        "multi_chord_supplemental_ocr_calls": root_anchor_probe_steps,
+        "multi_chord_supplemental_tokens": len(root_anchor_local_tokens),
+        "multi_chord_supplemental_rejects": (
+            len(root_anchor_probe_rejects) + len(root_anchor_local_rejects)
+        ),
+        "multi_chord_anchor_probe_tokens": len(root_anchor_probe_tokens),
+        "multi_chord_anchor_probe_rejects": len(root_anchor_probe_rejects),
+        "multi_chord_anchor_candidates": [
+            anchor.to_dict() for anchor in root_anchor_candidates
+        ],
+        "multi_chord_anchor_local_ocr_calls": root_anchor_local_steps,
+        "multi_chord_anchor_local_tokens": len(root_anchor_local_tokens),
+        "multi_chord_anchor_local_rejects": len(root_anchor_local_rejects),
         "multi_chord_supplemental_plan": multi_chord_plan.diagnostics,
         "region_allowlists_enabled": True,
         "semantic_assembly": semantic_assembly.diagnostics,
+        "image_scaling": image_scale.to_dict(),
     }
     scan_regions = [
         {
@@ -440,7 +498,14 @@ def run_chord_chart_pipeline(
             rows,
             measure_indices=set(multi_chord_plan.measure_indices),
             region_names=MULTI_CHORD_CHART_CELL_REGION_NAMES,
-            source="cell_ocr_targeted",
+            source="cell_ocr_root_anchor_probe",
+        ),
+        *chart_root_anchor_local_region_boxes(
+            image,
+            rows,
+            anchor_candidates=root_anchor_candidates,
+            measure_indices=set(multi_chord_plan.measure_indices),
+            source="cell_ocr_root_anchor",
         ),
     ]
     _report_progress(
@@ -458,7 +523,13 @@ def run_chord_chart_pipeline(
         image=image,
         pages=result_payload["pages"],
         chart_ocr=result_payload["chart_ocr"],
-        ocr_tokens=[*page_tokens, *row_tokens, *cell_tokens, *semantic_assembly.tokens],
+        ocr_tokens=[
+            *page_tokens,
+            *row_tokens,
+            *root_anchor_probe_tokens,
+            *cell_tokens,
+            *semantic_assembly.tokens,
+        ],
         ocr_rejects=[*page_rejects, *row_rejects, *cell_rejects],
         scan_regions=scan_regions,
         output_dir=output_dir,

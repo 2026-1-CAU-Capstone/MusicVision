@@ -12,6 +12,8 @@ import numpy as np
 
 CHORD_CHART_OVERLAY_FILENAME = "chord_chart_overlay.png"
 CHORD_CHART_OCR_DEBUG_OVERLAY_FILENAME = "chord_chart_ocr_debug_overlay.png"
+CHORD_CHART_SCAN_BOUNDARY_OVERLAY_FILENAME = "chord_chart_scan_boundary_overlay.png"
+CHORD_CHART_ROOT_OCR_BBOX_OVERLAY_FILENAME = "chord_chart_root_ocr_bbox_overlay.png"
 MEASURE_COLOUR = (40, 120, 220)
 CHORD_COLOUR = (30, 170, 60)
 SYMBOL_COLOUR = (220, 140, 30)
@@ -72,6 +74,42 @@ def write_chord_chart_ocr_debug_overlay(
     return output_path
 
 
+def write_chord_chart_scan_boundary_overlay(
+    *,
+    image: np.ndarray,
+    pages: list[dict[str, Any]],
+    scan_regions: list[dict[str, Any]],
+    chart_ocr: dict[str, Any] | None = None,
+    output_dir: Path,
+) -> Path:
+    overlay = render_chord_chart_scan_boundary_overlay(
+        image=image,
+        pages=pages,
+        scan_regions=scan_regions,
+        chart_ocr=chart_ocr,
+    )
+    output_path = output_dir / CHORD_CHART_SCAN_BOUNDARY_OVERLAY_FILENAME
+    cv2.imwrite(str(output_path), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
+    return output_path
+
+
+def write_chord_chart_root_ocr_bbox_overlay(
+    *,
+    image: np.ndarray,
+    pages: list[dict[str, Any]],
+    chart_ocr: dict[str, Any],
+    output_dir: Path,
+) -> Path:
+    overlay = render_chord_chart_root_ocr_bbox_overlay(
+        image=image,
+        pages=pages,
+        chart_ocr=chart_ocr,
+    )
+    output_path = output_dir / CHORD_CHART_ROOT_OCR_BBOX_OVERLAY_FILENAME
+    cv2.imwrite(str(output_path), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
+    return output_path
+
+
 def render_chord_chart_overlay(
     *,
     image: np.ndarray,
@@ -125,6 +163,37 @@ def render_chord_chart_ocr_debug_overlay(
         chart_ocr=chart_ocr,
     )
     _draw_debug_legend(marked_image)
+    return marked_image
+
+
+def render_chord_chart_scan_boundary_overlay(
+    *,
+    image: np.ndarray,
+    pages: list[dict[str, Any]],
+    scan_regions: list[dict[str, Any]],
+    chart_ocr: dict[str, Any] | None = None,
+) -> np.ndarray:
+    marked_image = image.copy()
+    _draw_final_measure_boxes(marked_image, pages, draw_labels=False, draw_chords=False)
+    _draw_scan_boundary_regions(
+        marked_image,
+        scan_regions=scan_regions,
+        chart_ocr=chart_ocr,
+    )
+    _draw_scan_boundary_legend(marked_image)
+    return marked_image
+
+
+def render_chord_chart_root_ocr_bbox_overlay(
+    *,
+    image: np.ndarray,
+    pages: list[dict[str, Any]],
+    chart_ocr: dict[str, Any],
+) -> np.ndarray:
+    marked_image = image.copy()
+    _draw_final_measure_boxes(marked_image, pages, draw_labels=False, draw_chords=False)
+    _draw_root_ocr_bbox_fragments(marked_image, chart_ocr=chart_ocr)
+    _draw_root_ocr_bbox_legend(marked_image)
     return marked_image
 
 
@@ -189,6 +258,263 @@ def _draw_debug_value_labels(
                 SCAN_ACCIDENTAL_COLOUR,
                 position="right",
             )
+
+
+def _draw_scan_boundary_regions(
+    image: np.ndarray,
+    *,
+    scan_regions: list[dict[str, Any]],
+    chart_ocr: dict[str, Any] | None,
+) -> None:
+    for region in _selected_scan_boundary_regions(
+        scan_regions,
+        chart_ocr=chart_ocr,
+    ):
+        if not _visible_scan_boundary_region(region):
+            continue
+        colour = _scan_region_colour(region)
+        bbox = region.get("bbox")
+        _draw_box(image, bbox, colour, thickness=2)
+        _draw_label_box(
+            image,
+            _scan_boundary_label(region),
+            bbox,
+            colour,
+            position=_scan_boundary_label_position(region),
+        )
+
+
+def _draw_root_ocr_bbox_fragments(
+    image: np.ndarray,
+    *,
+    chart_ocr: dict[str, Any],
+) -> None:
+    for fragment in _root_ocr_bbox_fragments(chart_ocr):
+        colour = (
+            SCAN_ROOT_COLOUR
+            if fragment.get("status") == "accepted"
+            else OCR_REJECTED_COLOUR
+        )
+        bbox = fragment.get("bbox")
+        _draw_box(image, bbox, colour, thickness=2)
+        _draw_label_box(
+            image,
+            _root_ocr_bbox_label(fragment),
+            bbox,
+            colour,
+            position="above",
+        )
+
+
+def _root_ocr_bbox_fragments(chart_ocr: dict[str, Any]) -> list[dict[str, Any]]:
+    fragments: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    strategy = chart_ocr.get("strategy")
+    if not isinstance(strategy, dict):
+        return fragments
+    entries = strategy.get("semantic_assembly")
+    if not isinstance(entries, list):
+        return fragments
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        status = str(entry.get("status") or "unknown")
+        measure_index = _maybe_int(entry.get("measure_index"))
+        for fragment in entry.get("fragments") or []:
+            if not isinstance(fragment, dict) or fragment.get("role") != "root":
+                continue
+            key = (
+                status,
+                measure_index,
+                str(fragment.get("text") or ""),
+                _bbox_key(fragment.get("bbox")),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            fragments.append(
+                {
+                    **fragment,
+                    "status": status,
+                    "measure_index": measure_index,
+                    "chord_text": entry.get("text"),
+                }
+            )
+    return fragments
+
+
+def _root_ocr_bbox_label(fragment: dict[str, Any]) -> str:
+    parts = []
+    measure_index = _maybe_int(fragment.get("measure_index"))
+    if measure_index is not None:
+        parts.append(f"m{measure_index:02d}")
+    parts.append(str(fragment.get("text") or "?"))
+    if fragment.get("status") != "accepted":
+        parts.append("rejected")
+    return _truncate_label(" ".join(parts), limit=18)
+
+
+def _selected_scan_boundary_regions(
+    scan_regions: list[dict[str, Any]],
+    *,
+    chart_ocr: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    visible_regions = [
+        region
+        for region in scan_regions
+        if isinstance(region, dict) and _visible_scan_boundary_region(region)
+    ]
+    if chart_ocr is not None:
+        final_measures = _accepted_semantic_measure_indices(chart_ocr)
+        final_anchor_indices = _accepted_semantic_anchor_indices(chart_ocr)
+        if final_measures:
+            selected = []
+            for region in visible_regions:
+                measure_index = _maybe_int(region.get("measure_index"))
+                if measure_index in final_anchor_indices:
+                    if (
+                        region.get("source") == "cell_ocr_root_anchor"
+                        and _maybe_int(region.get("anchor_index"))
+                        in final_anchor_indices[measure_index]
+                    ):
+                        selected.append(region)
+                    continue
+                if measure_index in final_measures:
+                    if region.get("source") != "cell_ocr_root_anchor":
+                        selected.append(region)
+                    continue
+                selected.append(region)
+            return _dedupe_scan_boundary_regions(selected)
+
+    anchor_measure_indices = {
+        int(region["measure_index"])
+        for region in visible_regions
+        if region.get("source") == "cell_ocr_root_anchor"
+        and region.get("measure_index") is not None
+    }
+    selected: list[dict[str, Any]] = []
+    for region in visible_regions:
+        measure_index = _maybe_int(region.get("measure_index"))
+        if measure_index in anchor_measure_indices:
+            if region.get("source") == "cell_ocr_root_anchor":
+                selected.append(region)
+            continue
+        selected.append(region)
+    return _dedupe_scan_boundary_regions(selected)
+
+
+def _accepted_semantic_measure_indices(chart_ocr: dict[str, Any]) -> set[int]:
+    measure_indices: set[int] = set()
+    for entry in _accepted_semantic_assembly_entries(chart_ocr):
+        measure_index = _maybe_int(entry.get("measure_index"))
+        if measure_index is not None:
+            measure_indices.add(measure_index)
+    return measure_indices
+
+
+def _accepted_semantic_anchor_indices(
+    chart_ocr: dict[str, Any],
+) -> dict[int, set[int]]:
+    anchor_indices: dict[int, set[int]] = {}
+    for entry in _accepted_semantic_assembly_entries(chart_ocr):
+        entry_measure_index = _maybe_int(entry.get("measure_index"))
+        for fragment in entry.get("fragments") or []:
+            if not isinstance(fragment, dict):
+                continue
+            root_anchor = (fragment.get("debug") or {}).get("root_anchor")
+            if not isinstance(root_anchor, dict):
+                continue
+            measure_index = _maybe_int(
+                root_anchor.get("measure_index") or fragment.get("measure_index")
+            )
+            if measure_index is None:
+                measure_index = entry_measure_index
+            anchor_index = _maybe_int(root_anchor.get("anchor_index"))
+            if measure_index is None or anchor_index is None:
+                continue
+            anchor_indices.setdefault(measure_index, set()).add(anchor_index)
+    return anchor_indices
+
+
+def _dedupe_scan_boundary_regions(
+    scan_regions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    seen: set[tuple[Any, ...]] = set()
+    deduped: list[dict[str, Any]] = []
+    for region in scan_regions:
+        key = (
+            region.get("source"),
+            region.get("region"),
+            _maybe_int(region.get("measure_index")),
+            _maybe_int(region.get("anchor_index")),
+            _bbox_key(region.get("bbox")),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(region)
+    return deduped
+
+
+def _visible_scan_boundary_region(region: dict[str, Any]) -> bool:
+    return str(region.get("region") or "") in {
+        "root",
+        "root_accidental",
+        "suffix_lower_right",
+    }
+
+
+def _scan_boundary_label(region: dict[str, Any]) -> str:
+    source = _short_scan_source_label(region)
+    measure = _maybe_int(region.get("measure_index"))
+    anchor = _maybe_int(region.get("anchor_index"))
+    region_name = str(region.get("region") or "?")
+    label_parts = []
+    if measure is not None:
+        label_parts.append(f"m{measure:02d}")
+    if anchor is not None:
+        label_parts.append(f"a{anchor}")
+    label_parts.append(_short_region_name(region_name))
+    if source not in {"anchor", "cell"}:
+        label_parts.append(source)
+    return " ".join(label_parts)
+
+
+def _short_scan_source_label(region: dict[str, Any]) -> str:
+    source = str(region.get("source") or "")
+    if source == "cell_ocr_root_anchor":
+        return "anchor"
+    if source == "cell_ocr_root_anchor_probe":
+        return "probe"
+    if source in {"cell_ocr_semantic", "cell_ocr_targeted"}:
+        return "cell"
+    if source == "cell_ocr_row_system":
+        return "row"
+    if source == "page_ocr":
+        return "page"
+    if source.startswith("cell_ocr"):
+        return "cell"
+    return source or "scan"
+
+
+def _short_region_name(region_name: str) -> str:
+    return {
+        "root": "root",
+        "root_accidental": "acc",
+        "suffix_lower_right": "suffix",
+    }.get(region_name, region_name)
+
+
+def _scan_boundary_label_position(region: dict[str, Any]) -> str:
+    region_name = str(region.get("region") or "")
+    if region_name == "root":
+        return "above"
+    if region_name == "root_accidental":
+        return "right"
+    if region_name == "suffix_lower_right":
+        return "below"
+    return "inside"
 
 
 def _accepted_semantic_assembly_entries(chart_ocr: dict[str, Any]) -> list[dict[str, Any]]:
@@ -320,6 +646,45 @@ def _draw_debug_legend(image: np.ndarray) -> None:
         "green: final chord (semantic chord)",
         "orange: suffix",
         "purple: accidental",
+    ]
+    x = 12
+    y = 22
+    for index, line in enumerate(lines):
+        _draw_label_at(
+            image,
+            line,
+            x=x,
+            y=y + index * 24,
+            colour=PANEL_TEXT_COLOUR,
+            fill=(255, 255, 255),
+        )
+
+
+def _draw_scan_boundary_legend(image: np.ndarray) -> None:
+    lines = [
+        "blue: root scan boundary",
+        "purple: accidental scan boundary",
+        "orange: suffix scan boundary",
+        "accepted semantic anchors show anchor-local scan boxes only",
+    ]
+    x = 12
+    y = 22
+    for index, line in enumerate(lines):
+        _draw_label_at(
+            image,
+            line,
+            x=x,
+            y=y + index * 24,
+            colour=PANEL_TEXT_COLOUR,
+            fill=(255, 255, 255),
+        )
+
+
+def _draw_root_ocr_bbox_legend(image: np.ndarray) -> None:
+    lines = [
+        "blue: accepted root OCR result bbox",
+        "red: rejected root OCR result bbox",
+        "boxes are OCR result boxes, not scan windows",
     ]
     x = 12
     y = 22
@@ -631,6 +996,15 @@ def _measure_region_suffix(payload: dict[str, Any]) -> str:
     return f" ({', '.join(parts)})" if parts else ""
 
 
+def _maybe_int(value: object) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _confidence(payload: dict[str, Any]) -> str:
     value = payload.get("confidence")
     if value is None:
@@ -737,6 +1111,9 @@ def _draw_label_box(
     if position == "inside":
         label_x = x0 + 3
         label_y = y0 + 18
+    elif position == "above":
+        label_x = x0 + 3
+        label_y = y0 - 5
     elif position == "below":
         label_x = x0 + 3
         label_y = y1 + 17

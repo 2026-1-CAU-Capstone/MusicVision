@@ -142,11 +142,86 @@ for multi-chord probing, producing 37 anchors and 100 anchor-local OCR boxes.
 That result is usable as a diagnostic run, but not yet a finished multi-chord
 selection strategy for dense charts.
 
-Current next accuracy step: prune root-anchor hints before local OCR. The
-highest-priority pruning checks are low-confidence hint filtering, rejecting
-anchors whose only source is a weak noisy page token, and using the measure's
-existing clean page/semantic chord when the extra anchor would add an unsupported
-third or fourth chord.
+### Position-first anchor trial for dense measures
+
+The Body and Soul chart exposed two separate failures in the root-anchor path:
+
+- Measure 1 contained a second root candidate for `Bb7b13`, but that candidate
+  was derived from an OCR text span and did not produce a valid suffix crop.
+- Measure 7 had semantic crop evidence for `Bbm7`, but the local debug runner
+  skipped semantic assembly because the repeat probe had detected a visual `%`.
+
+The next trial adds image-derived root anchors alongside the OCR root-anchor
+scan. For each measure, the pipeline thresholds the chord band, keeps connected
+components whose size matches main root glyphs, groups nearby components from
+the same chord symbol, and records the largest component in each group as a
+chord-start position.
+
+A first Body and Soul regeneration let visual anchors select supplemental OCR
+measures by themselves. That selected 24 of 25 measures, produced 81 final
+anchors and 232 anchor-local OCR boxes, and increased runtime to about 187
+seconds. That behavior was too broad for production use. The visual anchors now
+stay in diagnostics and can refine positions for measures that page/row OCR
+already selected for multi-chord probing, but they do not by themselves expand
+the supplemental OCR measure set.
+
+The visual anchors do not provide the final chord text. They only refine local
+OCR box positions. The final chord text still comes from anchor-local `root`,
+`root_accidental`, and `suffix_lower_right` OCR crops, followed by semantic
+assembly.
+
+The same pass also added a suffix-specific fallback for anchor-local OCR: if a
+`suffix_lower_right` crop returns no text at scale `2.0`, that crop is retried at
+scale `3.0`. Body and Soul measure 1 showed why this matters: the second-chord
+suffix pixels for `Bb7b13` were readable as `3711`/`37613` in direct crop probes,
+but the normal pass could produce no suffix token. Semantic assembly now treats
+`7613`, `37613`, and `3711` as numeric OCR readings of `7b13`.
+
+The local semantic debug runner also stopped using the repeat probe as a hard
+semantic-assembly skip. The parser already adds a visual `%` only when a measure
+has no parsed chords, so allowing semantic assembly first lets a real chord like
+Body and Soul measure 7 win over a false percent detection.
+
+The scan-boundary overlay now draws accepted semantic anchor-local boxes instead
+of every candidate anchor box. This keeps the debug image focused on the crop
+regions that actually contributed to accepted semantic chords. Anchor-local
+vertical bounds were also aligned with `_cell_ocr_regions()`: root, accidental,
+and suffix boxes use the same top/bottom ratios as the regular measure-level
+semantic crops. In particular, anchor-local `suffix_lower_right` now ends at the
+same `0.76` measure-height ratio as the regular suffix crop instead of extending
+to `0.92`.
+
+The padded measure crop is now scaled from detected measure height instead of
+using fixed vertical pixel padding. Autumn Leaves is the reference geometry:
+detected measure height `180`, top padding `35`, next-row-capped bottom padding
+`75`, and padded crop height `290`. The resulting ratios are `35/180` top
+padding, `80/180` requested bottom padding, and `8/180` next-row safety gap.
+This keeps `_cell_ocr_regions()` boxes at the same height ratio relative to the
+detected measure across charts with different source resolutions.
+
+Multi-chord probing now has a second trigger after the page/row spacing rules:
+visual root-height anchors. The page/row plan still handles explicit spacing,
+wide OCR tokens, and right-half chord-like fragments first. When that evidence
+is absent, the visual pass can still mark a measure as multi-chord if it finds
+at least two root-height components. The detector uses the first chord root's
+component height as the reference and keeps later components with comparable
+height, so horizontally squished roots can become anchors without depending on
+root width as the main signal.
+
+The visual root-height detector now calibrates root height once per detected
+row instead of once per measure. Each measure is still scanned for component
+positions, but those components are compared against the row's first usable root
+height. Component grouping also stops when another row-calibrated root-height
+component appears between nearby components, so a suffix-like component can stay
+with its root while a second root starts a new anchor group.
+
+A visual-position crop trial was not kept. In Body and Soul measure 4, replacing
+OCR-derived anchor centers with visual component centers aligned the debug boxes
+for `Fm7` and `Edim7`, but the same crop-position change made Autumn Leaves
+measure 19 regress from `Gbm7` to `Fm7`. The current implementation therefore
+uses visual roots to decide anchor counts and supplemental measures, while
+anchor-local OCR crop placement still uses the OCR/root-anchor center that won
+the final anchor merge.
 
 ## 2026-06-06 - Public chart contract and semantic crop OCR
 

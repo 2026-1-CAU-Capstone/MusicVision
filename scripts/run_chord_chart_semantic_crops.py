@@ -21,14 +21,18 @@ from pipeline.chord_charts.ocr_backend import (
     build_root_anchor_candidates,
     chart_cell_ocr_region_boxes,
     chart_root_anchor_local_region_boxes,
+    detect_visual_root_anchor_candidates,
     extract_chart_cell_ocr_tokens,
     extract_chart_ocr_tokens,
     extract_chart_root_anchor_local_ocr_tokens,
+    measure_indices_with_multiple_root_anchors,
 )
 from pipeline.chord_charts.image_preprocessing import upscale_small_chord_chart_image
 from pipeline.chord_charts.overlay import (
     write_chord_chart_ocr_debug_overlay,
     write_chord_chart_overlay,
+    write_chord_chart_root_ocr_bbox_overlay,
+    write_chord_chart_scan_boundary_overlay,
 )
 from pipeline.chord_charts.ocr_strategy import (
     plan_multi_chord_chart_cell_ocr,
@@ -112,11 +116,14 @@ def main() -> None:
         )
         print(
             "repeat probe: "
-            f"{len(repeat_measure_indices)} measure(s) skipped for semantic chords"
+            f"{len(repeat_measure_indices)} visual repeat candidate measure(s)"
         )
 
     multi_chord_plan = None
     supplemental_measure_indices: set[int] = set()
+    visual_root_anchor_candidates = []
+    visual_multi_chord_measure_indices: set[int] = set()
+    visual_supplemental_measure_indices: set[int] = set()
     if semantic_mode:
         if page_tokens:
             multi_chord_plan = plan_multi_chord_chart_cell_ocr(
@@ -131,6 +138,25 @@ def main() -> None:
             supplemental_measure_indices = set(measure_indices)
         elif args.no_page_ocr:
             supplemental_measure_indices = _all_measure_indices(rows)
+        visual_root_anchor_candidates = detect_visual_root_anchor_candidates(
+            image,
+            rows,
+            measure_indices=measure_indices,
+        )
+        visual_multi_chord_measure_indices = measure_indices_with_multiple_root_anchors(
+            visual_root_anchor_candidates
+        )
+        visual_supplemental_measure_indices = set(visual_multi_chord_measure_indices)
+        if measure_indices is not None:
+            visual_supplemental_measure_indices &= set(measure_indices)
+        supplemental_measure_indices |= visual_supplemental_measure_indices
+        if visual_multi_chord_measure_indices:
+            print(
+                "visual root anchors: "
+                f"{len(visual_root_anchor_candidates)} candidate(s), "
+                f"{len(visual_multi_chord_measure_indices)} multi-anchor measure(s), "
+                f"{len(visual_supplemental_measure_indices)} supplemental measure(s)"
+            )
 
     expected_root_anchor_probe_ocr_calls = _count_expected_cell_calls(
         rows,
@@ -196,6 +222,7 @@ def main() -> None:
             rows=rows,
             measure_indices=supplemental_measure_indices,
             anchor_hints=root_anchor_hints,
+            visual_candidates=visual_root_anchor_candidates,
         )
         root_anchor_local_boxes = chart_root_anchor_local_region_boxes(
             image,
@@ -233,7 +260,6 @@ def main() -> None:
     assembly = assemble_semantic_chord_tokens(
         cell_tokens,
         image=image,
-        skip_measure_indices=repeat_measure_indices,
     )
     print(f"semantic assembly: {len(assembly.tokens)} chord tokens")
 
@@ -258,7 +284,8 @@ def main() -> None:
         "semantic_cell_rejects": len(cell_rejects),
         "semantic_cell_runtime_seconds": round(cell_runtime, 3),
         "semantic_assembled_tokens": len(assembly.tokens),
-        "repeat_priority_measure_indices": sorted(repeat_measure_indices),
+        "repeat_probe_measure_indices": sorted(repeat_measure_indices),
+        "semantic_assembly_skip_measure_indices": [],
         "semantic_cell_region_names": list(region_names),
         "semantic_cell_ocr_calls": expected_core_cell_ocr_calls,
         "semantic_cell_measure_indices": (
@@ -280,6 +307,15 @@ def main() -> None:
         "multi_chord_anchor_candidates": [
             anchor.to_dict() for anchor in root_anchor_candidates
         ],
+        "multi_chord_visual_anchor_candidates": [
+            anchor.to_dict() for anchor in visual_root_anchor_candidates
+        ],
+        "multi_chord_visual_anchor_measure_indices": sorted(
+            visual_multi_chord_measure_indices
+        ),
+        "multi_chord_visual_supplemental_measure_indices": sorted(
+            visual_supplemental_measure_indices
+        ),
         "multi_chord_anchor_local_ocr_calls": root_anchor_local_ocr_calls,
         "multi_chord_anchor_local_tokens": len(root_anchor_local_tokens),
         "multi_chord_anchor_local_rejects": len(root_anchor_local_rejects),
@@ -353,9 +389,30 @@ def main() -> None:
         scan_regions=scan_regions,
         output_dir=output_dir,
     )
+    scan_boundary_overlay_path = write_chord_chart_scan_boundary_overlay(
+        image=image,
+        pages=result_payload["pages"],
+        scan_regions=scan_regions,
+        chart_ocr=result_payload["chart_ocr"],
+        output_dir=output_dir,
+    )
+    root_ocr_bbox_overlay_path = write_chord_chart_root_ocr_bbox_overlay(
+        image=image,
+        pages=result_payload["pages"],
+        chart_ocr=result_payload["chart_ocr"],
+        output_dir=output_dir,
+    )
     result_payload["overlay_file"] = overlay_path.name
     result_payload["debug_overlay_file"] = debug_overlay_path.name
+    result_payload["scan_boundary_overlay_file"] = scan_boundary_overlay_path.name
+    result_payload["root_ocr_bbox_overlay_file"] = root_ocr_bbox_overlay_path.name
     result_payload["chart_ocr"]["debug_overlay_file"] = debug_overlay_path.name
+    result_payload["chart_ocr"]["scan_boundary_overlay_file"] = (
+        scan_boundary_overlay_path.name
+    )
+    result_payload["chart_ocr"]["root_ocr_bbox_overlay_file"] = (
+        root_ocr_bbox_overlay_path.name
+    )
 
     chord_chart_debug_path = export_chord_chart_debug_json(
         result_payload=result_payload,
@@ -381,6 +438,8 @@ def main() -> None:
                 "chord_chart_path": str(chord_chart_path),
                 "chord_chart_debug_path": str(chord_chart_debug_path),
                 "debug_overlay_path": str(debug_overlay_path),
+                "scan_boundary_overlay_path": str(scan_boundary_overlay_path),
+                "root_ocr_bbox_overlay_path": str(root_ocr_bbox_overlay_path),
                 "public_chord_count": len(public_payload.get("chords") or []),
                 "public_measure_count": public_payload.get("measure_count"),
                 "public_flow": public_payload.get("flow"),
@@ -405,6 +464,8 @@ def main() -> None:
     print(f"wrote {chord_chart_path}")
     print(f"wrote {chord_chart_debug_path}")
     print(f"wrote {debug_overlay_path}")
+    print(f"wrote {scan_boundary_overlay_path}")
+    print(f"wrote {root_ocr_bbox_overlay_path}")
     print(f"wrote {summary_path}")
     print(f"runtime={runtime_seconds:.2f}s")
 

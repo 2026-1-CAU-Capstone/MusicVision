@@ -361,9 +361,13 @@ def _repair_numeric_flat_nine_suffix(text: str) -> str | None:
 
 
 def _repair_numeric_flat_thirteen_suffix(text: str) -> str | None:
-    if text not in {"713", "7l3", "7I3", "7113", "7l13", "7I13"}:
-        return None
-    return "7b13"
+    if text in {"713", "7l3", "7I3", "7113", "7l13", "7I13"}:
+        return "7b13"
+    if re.fullmatch(r"[3)]?7(?:6|b|B)13", text):
+        return "7b13"
+    if text == "3711":
+        return "7b13"
+    return None
 
 
 def _body_from_suffix_token(

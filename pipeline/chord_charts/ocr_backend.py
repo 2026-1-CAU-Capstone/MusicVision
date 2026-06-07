@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+import cv2
 import numpy as np
 
 from pipeline.chord_charts.visual_suffix import normalize_suffix_ocr_text
@@ -41,6 +42,10 @@ CHART_SEMANTIC_REGION_ALLOWLISTS = {
     "root_accidental_wide": CHART_WIDE_ACCIDENTAL_OCR_ALLOWLIST,
     "suffix_wide": CHART_SUFFIX_OCR_ALLOWLIST,
 }
+MEASURE_CELL_X_INSET_PX = 8.0
+MEASURE_CELL_TOP_PADDING_RATIO = 35.0 / 180.0
+MEASURE_CELL_BOTTOM_PADDING_RATIO = 80.0 / 180.0
+MEASURE_CELL_NEXT_ROW_GAP_RATIO = 8.0 / 180.0
 
 
 @dataclass(frozen=True)
@@ -109,6 +114,17 @@ class RootAnchorCandidate:
             "row_index": self.row_index,
             "col_index": self.col_index,
         }
+
+
+@dataclass(frozen=True)
+class _VisualRootMeasureScan:
+    measure_index: int
+    row_index: int | None
+    col_index: int
+    cell_box: tuple[int, int, int, int]
+    measure_width: float
+    measure_height: float
+    components: list[dict[str, float]]
 
 
 def extract_chart_ocr_tokens(
@@ -195,16 +211,15 @@ def extract_chart_cell_ocr_tokens(
                 measure_index += 1
                 continue
 
-            x0 = int(max(0, float(left.x) + 8))
-            x1 = int(min(image.shape[1], float(right.x) - 8))
-            next_y_top = (
-                float(getattr(row_list[row_position + 1], "y_top"))
-                if row_position + 1 < len(row_list)
-                else float(image.shape[0])
+            cell_box = _measure_cell_box(
+                image,
+                row_list,
+                row_position,
+                row,
+                left,
+                right,
             )
-            y0 = int(max(0, float(row.y_top) - 35))
-            y1 = int(min(image.shape[0], next_y_top - 8, float(row.y_bottom) + 80))
-            if x1 <= x0 or y1 <= y0:
+            if cell_box is None:
                 completed_regions += len(selected_regions)
                 _report_cell_ocr_progress(
                     progress_callback,
@@ -214,6 +229,7 @@ def extract_chart_cell_ocr_tokens(
                 measure_index += 1
                 continue
 
+            x0, y0, x1, y1 = cell_box
             crop = image[y0:y1, x0:x1].copy()
             for region_name, xa, xb, ya, yb in selected_regions:
                 crop_height, crop_width = crop.shape[:2]
@@ -350,8 +366,8 @@ def extract_chart_root_anchor_local_ocr_tokens(
             continue
 
         subcrop = image[y0:y1, x0:x1].copy()
-        processed = preprocess_for_ocr(subcrop, scale=ocr_scale)
-        inverse_scale = 1.0 / ocr_scale
+        read_scale = ocr_scale
+        processed = preprocess_for_ocr(subcrop, scale=read_scale)
         results = _read_chart_text(
             reader,
             processed,
@@ -361,6 +377,27 @@ def extract_chart_root_anchor_local_ocr_tokens(
                 else None
             ),
         )
+        fallback_debug: dict[str, Any] | None = None
+        if not results and region_name == "suffix_lower_right" and ocr_scale < 3.0:
+            read_scale = 3.0
+            processed = preprocess_for_ocr(subcrop, scale=read_scale)
+            results = _read_chart_text(
+                reader,
+                processed,
+                allowlist=(
+                    region_allowlists.get(region_name)
+                    if region_allowlists is not None
+                    else None
+                ),
+            )
+            fallback_debug = {
+                "ocr_scale": {
+                    "requested": ocr_scale,
+                    "used": read_scale,
+                    "reason": "empty_primary_suffix_result",
+                }
+            }
+        inverse_scale = 1.0 / read_scale
 
         for points, text, confidence in results:
             raw_text, normalization_debug = _normalize_cell_region_text(
@@ -368,6 +405,11 @@ def extract_chart_root_anchor_local_ocr_tokens(
                 (text or "").strip(),
                 subcrop,
             )
+            if fallback_debug is not None:
+                normalization_debug = {
+                    **(normalization_debug or {}),
+                    **fallback_debug,
+                }
             if not raw_text:
                 continue
 
@@ -611,6 +653,7 @@ def build_root_anchor_candidates(
     rows: list[Any] | None = None,
     measure_indices: set[int] | None = None,
     anchor_hints: list[dict[str, Any]] | None = None,
+    visual_candidates: list[RootAnchorCandidate] | None = None,
 ) -> list[RootAnchorCandidate]:
     measure_boxes = (
         _measure_cell_boxes_by_index(image, rows)
@@ -637,8 +680,16 @@ def build_root_anchor_candidates(
             continue
         hints_by_measure[candidate.measure_index].append(candidate)
 
+    visual_by_measure: dict[int, list[RootAnchorCandidate]] = defaultdict(list)
+    for candidate in visual_candidates or []:
+        if measure_indices is not None and candidate.measure_index not in measure_indices:
+            continue
+        visual_by_measure[candidate.measure_index].append(candidate)
+
     anchors: list[RootAnchorCandidate] = []
-    measure_indexes = sorted(set(raw_by_measure) | set(hints_by_measure))
+    measure_indexes = sorted(
+        set(raw_by_measure) | set(hints_by_measure) | set(visual_by_measure)
+    )
     for measure_index in measure_indexes:
         measure_box = measure_boxes.get(measure_index)
         measure_width = (
@@ -653,7 +704,11 @@ def build_root_anchor_candidates(
             hint_candidates=hints_by_measure[measure_index],
             measure_width=measure_width,
         )
-        threshold = max(22.0, measure_width * 0.075)
+        measure_candidates = [
+            *visual_by_measure[measure_index],
+            *measure_candidates,
+        ]
+        threshold = max(30.0, measure_width * 0.10)
         groups: list[list[RootAnchorCandidate]] = []
         for candidate in sorted(
             measure_candidates,
@@ -692,6 +747,65 @@ def build_root_anchor_candidates(
             )
 
     return anchors
+
+
+def detect_visual_root_anchor_candidates(
+    image: np.ndarray,
+    rows: list[Any],
+    *,
+    measure_indices: set[int] | None = None,
+) -> list[RootAnchorCandidate]:
+    row_list = list(rows)
+    candidates: list[RootAnchorCandidate] = []
+    measure_index = 1
+    for row_position, row in enumerate(row_list):
+        boundaries = getattr(row, "boundaries", [])
+        row_scans: list[_VisualRootMeasureScan] = []
+        for col_index, (left, right) in enumerate(
+            zip(boundaries, boundaries[1:]),
+            start=1,
+        ):
+            cell_box = _measure_cell_box(image, row_list, row_position, row, left, right)
+            if cell_box is not None:
+                scan = _visual_root_measure_scan(
+                    image,
+                    row=row,
+                    cell_box=cell_box,
+                    measure_index=measure_index,
+                    row_index=getattr(row, "index", None),
+                    col_index=col_index,
+                )
+                if scan is not None:
+                    row_scans.append(scan)
+            measure_index += 1
+
+        row_reference = _visual_root_height_reference_for_row(row_scans)
+        for scan in row_scans:
+            if measure_indices is not None and scan.measure_index not in measure_indices:
+                continue
+            candidates.extend(
+                _visual_root_anchor_candidates_from_scan(
+                    scan,
+                    reference=row_reference,
+                )
+            )
+
+    return candidates
+
+
+def measure_indices_with_multiple_root_anchors(
+    anchor_candidates: list[RootAnchorCandidate],
+    *,
+    min_anchor_count: int = 2,
+) -> set[int]:
+    counts: dict[int, int] = defaultdict(int)
+    for candidate in anchor_candidates:
+        counts[candidate.measure_index] += 1
+    return {
+        measure_index
+        for measure_index, count in counts.items()
+        if count >= min_anchor_count
+    }
 
 
 def chart_root_anchor_local_region_boxes(
@@ -777,15 +891,25 @@ def _measure_cell_box(
     left: Any,
     right: Any,
 ) -> tuple[int, int, int, int] | None:
-    x0 = int(max(0, float(left.x) + 8))
-    x1 = int(min(image.shape[1], float(right.x) - 8))
+    x0 = int(max(0, float(left.x) + MEASURE_CELL_X_INSET_PX))
+    x1 = int(min(image.shape[1], float(right.x) - MEASURE_CELL_X_INSET_PX))
     next_y_top = (
         float(getattr(rows[row_position + 1], "y_top"))
         if row_position + 1 < len(rows)
         else float(image.shape[0])
     )
-    y0 = int(max(0, float(row.y_top) - 35))
-    y1 = int(min(image.shape[0], next_y_top - 8, float(row.y_bottom) + 80))
+    measure_height = max(1.0, float(row.y_bottom) - float(row.y_top))
+    top_padding = measure_height * MEASURE_CELL_TOP_PADDING_RATIO
+    bottom_padding = measure_height * MEASURE_CELL_BOTTOM_PADDING_RATIO
+    next_row_gap = measure_height * MEASURE_CELL_NEXT_ROW_GAP_RATIO
+    y0 = int(max(0, float(row.y_top) - top_padding))
+    y1 = int(
+        min(
+            image.shape[0],
+            next_y_top - next_row_gap,
+            float(row.y_bottom) + bottom_padding,
+        )
+    )
     if x1 <= x0 or y1 <= y0:
         return None
     return x0, y0, x1, y1
@@ -809,6 +933,269 @@ def _measure_cell_boxes_by_index(
                 boxes[measure_index] = box
             measure_index += 1
     return boxes
+
+
+def _visual_root_measure_scan(
+    image: np.ndarray,
+    *,
+    row: Any,
+    cell_box: tuple[int, int, int, int],
+    measure_index: int,
+    row_index: int | None,
+    col_index: int,
+) -> _VisualRootMeasureScan | None:
+    x0, cell_y0, x1, cell_y1 = cell_box
+    measure_width = max(1.0, float(x1 - x0))
+    measure_height = max(1.0, float(cell_y1 - cell_y0))
+    band_y0 = int(max(cell_y0, float(getattr(row, "y_top")) - 12.0))
+    band_y1 = int(
+        min(
+            cell_y1,
+            float(getattr(row, "y_bottom")) + max(14.0, measure_height * 0.08),
+        )
+    )
+    if x1 <= x0 or band_y1 <= band_y0:
+        return None
+
+    crop = image[band_y0:band_y1, x0:x1]
+    if crop.size == 0:
+        return None
+
+    gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    components = _visual_root_sized_components(binary, x_offset=x0, y_offset=band_y0)
+    return _VisualRootMeasureScan(
+        measure_index=measure_index,
+        row_index=int(row_index) if row_index is not None else None,
+        col_index=col_index,
+        cell_box=cell_box,
+        measure_width=measure_width,
+        measure_height=measure_height,
+        components=components,
+    )
+
+
+def _visual_root_anchor_candidates_from_scan(
+    scan: _VisualRootMeasureScan,
+    *,
+    reference: dict[str, float] | None,
+) -> list[RootAnchorCandidate]:
+    groups = _visual_root_component_groups(
+        scan.components,
+        measure_width=scan.measure_width,
+        reference=reference,
+    )
+    groups = _height_calibrated_visual_root_component_groups(
+        groups,
+        reference=reference,
+    )
+
+    candidates: list[RootAnchorCandidate] = []
+    for group in groups:
+        primary = _visual_root_group_primary(group)
+        source_bbox = _component_group_bbox(group)
+        confidence = _visual_root_anchor_confidence(
+            primary,
+            measure_width=scan.measure_width,
+            measure_height=scan.measure_height,
+        )
+        candidates.append(
+            RootAnchorCandidate(
+                measure_index=scan.measure_index,
+                anchor_index=0,
+                root="?",
+                center_x=primary["cx"],
+                bbox=(
+                    primary["x0"],
+                    primary["y0"],
+                    primary["x1"],
+                    primary["y1"],
+                ),
+                confidence=confidence,
+                source_text="visual_root_anchor",
+                source_bbox=source_bbox,
+                row_index=scan.row_index,
+                col_index=scan.col_index,
+            )
+        )
+    return candidates
+
+
+def _visual_root_sized_components(
+    binary: np.ndarray,
+    *,
+    x_offset: int,
+    y_offset: int,
+) -> list[dict[str, float]]:
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        binary,
+        connectivity=8,
+    )
+    band_height, band_width = binary.shape[:2]
+    min_height = max(28.0, band_height * 0.30)
+    min_width = max(8.0, band_width * 0.025)
+    max_width = max(52.0, band_width * 0.50)
+    min_area = max(90.0, band_width * band_height * 0.003)
+    components: list[dict[str, float]] = []
+
+    for index in range(1, count):
+        x, y, width, height, area = [float(value) for value in stats[index]]
+        if height < min_height or width < min_width or width > max_width:
+            continue
+        if area < min_area:
+            continue
+        aspect = width / max(height, 1.0)
+        if not 0.10 <= aspect <= 1.60:
+            continue
+        if y > band_height * 0.46:
+            continue
+
+        components.append(
+            {
+                "x0": x_offset + x,
+                "y0": y_offset + y,
+                "x1": x_offset + x + width,
+                "y1": y_offset + y + height,
+                "cx": x_offset + x + width / 2.0,
+                "cy": y_offset + y + height / 2.0,
+                "width": width,
+                "height": height,
+                "area": area,
+            }
+        )
+
+    return components
+
+
+def _visual_root_height_reference_for_row(
+    scans: list[_VisualRootMeasureScan],
+) -> dict[str, float] | None:
+    for scan in scans:
+        if not scan.components:
+            continue
+        first_x = min(component["cx"] for component in scan.components)
+        first_group = [
+            component
+            for component in scan.components
+            if component["cx"] - first_x <= max(38.0, scan.measure_width * 0.14)
+        ]
+        if first_group:
+            return _visual_root_group_primary(first_group)
+    return None
+
+
+def _height_calibrated_visual_root_component_groups(
+    groups: list[list[dict[str, float]]],
+    *,
+    reference: dict[str, float] | None = None,
+) -> list[list[dict[str, float]]]:
+    if not groups:
+        return []
+
+    group_records = [
+        (group, _visual_root_group_primary(group))
+        for group in groups
+        if group
+    ]
+    if not group_records:
+        return []
+
+    if reference is None:
+        reference = group_records[0][1]
+    reference_height = max(1.0, reference["height"])
+    max_center_y_delta = max(24.0, reference_height * 0.32)
+    calibrated: list[list[dict[str, float]]] = []
+    for group, primary in group_records:
+        height_ratio = primary["height"] / reference_height
+        if not 0.72 <= height_ratio <= 1.22:
+            continue
+        if abs(primary["cy"] - reference["cy"]) > max_center_y_delta:
+            continue
+        calibrated.append(group)
+
+    return calibrated
+
+
+def _visual_root_group_primary(
+    group: list[dict[str, float]],
+) -> dict[str, float]:
+    return max(
+        group,
+        key=lambda item: (item["area"], item["height"], item["width"]),
+    )
+
+
+def _visual_root_component_groups(
+    components: list[dict[str, float]],
+    *,
+    measure_width: float,
+    reference: dict[str, float] | None = None,
+) -> list[list[dict[str, float]]]:
+    if not components:
+        return []
+
+    merge_distance = max(38.0, measure_width * 0.14)
+    groups: list[list[dict[str, float]]] = []
+    for component in sorted(components, key=lambda item: item["cx"]):
+        component_is_root = _component_matches_root_reference(component, reference)
+        previous_group_has_root = bool(
+            groups
+            and any(
+                _component_matches_root_reference(item, reference)
+                for item in groups[-1]
+            )
+        )
+        root_boundary = component_is_root and previous_group_has_root
+        if (
+            groups
+            and not root_boundary
+            and component["cx"] - _visual_component_group_center(groups[-1])
+            <= merge_distance
+        ):
+            groups[-1].append(component)
+        else:
+            groups.append([component])
+    return groups
+
+
+def _component_matches_root_reference(
+    component: dict[str, float],
+    reference: dict[str, float] | None,
+) -> bool:
+    if reference is None:
+        return False
+    reference_height = max(1.0, reference["height"])
+    height_ratio = component["height"] / reference_height
+    if not 0.72 <= height_ratio <= 1.22:
+        return False
+    max_center_y_delta = max(24.0, reference_height * 0.32)
+    return abs(component["cy"] - reference["cy"]) <= max_center_y_delta
+
+
+def _visual_component_group_center(group: list[dict[str, float]]) -> float:
+    return float(np.mean([component["cx"] for component in group]))
+
+
+def _component_group_bbox(
+    group: list[dict[str, float]],
+) -> tuple[float, float, float, float]:
+    return (
+        min(component["x0"] for component in group),
+        min(component["y0"] for component in group),
+        max(component["x1"] for component in group),
+        max(component["y1"] for component in group),
+    )
+
+
+def _visual_root_anchor_confidence(
+    component: dict[str, float],
+    *,
+    measure_width: float,
+    measure_height: float,
+) -> float:
+    height_score = min(1.0, component["height"] / max(measure_height * 0.58, 1.0))
+    width_score = min(1.0, component["width"] / max(measure_width * 0.16, 1.0))
+    return round(0.45 + 0.35 * height_score + 0.20 * width_score, 3)
 
 
 def _split_root_anchor_token(token: OCRToken) -> list[RootAnchorCandidate]:
@@ -962,33 +1349,46 @@ def _root_anchor_local_region_boxes(
     right_limit = mx1
     if next_anchor_x is not None:
         right_limit = min(right_limit, next_anchor_x - measure_width * 0.035)
+    root_y0, root_y1 = _measure_relative_y_bounds(my0, measure_height, 0.05, 0.77)
+    accidental_y0, accidental_y1 = _measure_relative_y_bounds(
+        my0,
+        measure_height,
+        0.0,
+        0.50,
+    )
+    suffix_y0, suffix_y1 = _measure_relative_y_bounds(
+        my0,
+        measure_height,
+        0.34,
+        0.76,
+    )
 
     regions = [
         (
             "root",
             (
                 cx - measure_width * 0.13,
-                my0 + measure_height * 0.05,
+                root_y0,
                 min(cx + measure_width * 0.15, right_limit),
-                my0 + measure_height * 0.77,
+                root_y1,
             ),
         ),
         (
             "root_accidental",
             (
                 cx + measure_width * 0.01,
-                my0,
+                accidental_y0,
                 min(cx + measure_width * 0.20, right_limit),
-                my0 + measure_height * 0.50,
+                accidental_y1,
             ),
         ),
         (
             "suffix_lower_right",
             (
                 cx - measure_width * 0.02,
-                my0 + measure_height * 0.34,
+                suffix_y0,
                 min(cx + measure_width * 0.46, right_limit),
-                my0 + measure_height * 0.76,
+                suffix_y1,
             ),
         ),
     ]
@@ -1004,6 +1404,15 @@ def _root_anchor_local_region_boxes(
             continue
         clamped.append((region_name, (x0, y0, x1, y1)))
     return clamped
+
+
+def _measure_relative_y_bounds(
+    y0: float,
+    height: float,
+    start_ratio: float,
+    end_ratio: float,
+) -> tuple[float, float]:
+    return y0 + int(height * start_ratio), y0 + int(height * end_ratio)
 
 
 def _root_anchor_region_debug(
@@ -1064,10 +1473,20 @@ def _row_ocr_regions(
             if row_position + 1 < len(row_list)
             else float(height)
         )
-        x0 = int(max(0, float(boundaries[0].x) + 8))
-        x1 = int(min(width, float(boundaries[-1].x) - 8))
-        y0 = int(max(0, float(row.y_top) - 35))
-        y1 = int(min(height, next_y_top - 8, float(row.y_bottom) + 80))
+        measure_height = max(1.0, float(row.y_bottom) - float(row.y_top))
+        top_padding = measure_height * MEASURE_CELL_TOP_PADDING_RATIO
+        bottom_padding = measure_height * MEASURE_CELL_BOTTOM_PADDING_RATIO
+        next_row_gap = measure_height * MEASURE_CELL_NEXT_ROW_GAP_RATIO
+        x0 = int(max(0, float(boundaries[0].x) + MEASURE_CELL_X_INSET_PX))
+        x1 = int(min(width, float(boundaries[-1].x) - MEASURE_CELL_X_INSET_PX))
+        y0 = int(max(0, float(row.y_top) - top_padding))
+        y1 = int(
+            min(
+                height,
+                next_y_top - next_row_gap,
+                float(row.y_bottom) + bottom_padding,
+            )
+        )
         if x1 <= x0 or y1 <= y0:
             continue
 

@@ -88,6 +88,20 @@ def test_semantic_assembly_repairs_split_numeric_flat_thirteen_suffix() -> None:
     assert [token.text for token in result.tokens] == ["D7b13"]
 
 
+def test_semantic_assembly_repairs_visual_flat_thirteen_suffix_reads() -> None:
+    result = assemble_semantic_chord_tokens(
+        [
+            _token("B", (10.0, 10.0, 30.0, 40.0), region="root"),
+            _token("b", (28.0, 8.0, 40.0, 24.0), region="root_accidental"),
+            _token("37613", (38.0, 24.0, 92.0, 42.0), region="suffix_lower_right"),
+            _token("7613", (138.0, 24.0, 192.0, 42.0), region="suffix_lower_right"),
+            _token("3711", (238.0, 24.0, 292.0, 42.0), region="suffix_lower_right"),
+        ]
+    )
+
+    assert [token.text for token in result.tokens] == ["Bb7b13"]
+
+
 def test_semantic_assembly_combines_split_seventh_and_sharp_suffix() -> None:
     result = assemble_semantic_chord_tokens(
         [

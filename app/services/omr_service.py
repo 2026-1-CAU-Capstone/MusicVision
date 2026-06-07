@@ -10,15 +10,19 @@ from pipeline.chord_charts.ocr_backend import (
     chart_cell_ocr_region_boxes,
     chart_row_ocr_region_boxes,
     chart_root_anchor_local_region_boxes,
+    detect_visual_root_anchor_candidates,
     extract_chart_cell_ocr_tokens,
     extract_chart_ocr_tokens,
     extract_chart_root_anchor_local_ocr_tokens,
     extract_chart_row_ocr_tokens,
+    measure_indices_with_multiple_root_anchors,
 )
 from pipeline.chord_charts.image_preprocessing import upscale_small_chord_chart_image
 from pipeline.chord_charts.overlay import (
     write_chord_chart_ocr_debug_overlay,
     write_chord_chart_overlay,
+    write_chord_chart_root_ocr_bbox_overlay,
+    write_chord_chart_scan_boundary_overlay,
 )
 from pipeline.chord_charts.ocr_strategy import (
     plan_multi_chord_chart_cell_ocr,
@@ -336,10 +340,18 @@ def run_chord_chart_pipeline(
         page_tokens=page_tokens,
         row_tokens=row_tokens,
     )
+    visual_root_anchor_candidates = detect_visual_root_anchor_candidates(image, rows)
+    visual_multi_chord_measure_indices = measure_indices_with_multiple_root_anchors(
+        visual_root_anchor_candidates
+    )
+    visual_supplemental_measure_indices = set(visual_multi_chord_measure_indices)
+    multi_chord_measure_indices = sorted(
+        set(multi_chord_plan.measure_indices) | visual_supplemental_measure_indices
+    )
     selective_region_names = SEMANTIC_CHART_CELL_REGION_NAMES
     selective_steps = len(selective_plan.measure_indices) * len(selective_region_names)
     root_anchor_probe_steps = (
-        len(multi_chord_plan.measure_indices) * len(MULTI_CHORD_CHART_CELL_REGION_NAMES)
+        len(multi_chord_measure_indices) * len(MULTI_CHORD_CHART_CELL_REGION_NAMES)
     )
     _report_progress(
         progress_callback,
@@ -372,12 +384,12 @@ def run_chord_chart_pipeline(
     root_anchor_local_tokens = []
     root_anchor_local_rejects = []
     root_anchor_local_steps = 0
-    if multi_chord_plan.measure_indices:
+    if multi_chord_measure_indices:
         root_anchor_hints = root_anchor_hints_from_plan(multi_chord_plan)
         root_anchor_probe_tokens, root_anchor_probe_rejects = extract_chart_cell_ocr_tokens(
             image,
             rows,
-            measure_indices=set(multi_chord_plan.measure_indices),
+            measure_indices=set(multi_chord_measure_indices),
             region_names=MULTI_CHORD_CHART_CELL_REGION_NAMES,
             region_allowlists=CHART_SEMANTIC_REGION_ALLOWLISTS,
             source="cell_ocr_root_anchor_probe",
@@ -394,15 +406,16 @@ def run_chord_chart_pipeline(
             root_anchor_probe_tokens,
             image=image,
             rows=rows,
-            measure_indices=set(multi_chord_plan.measure_indices),
+            measure_indices=set(multi_chord_measure_indices),
             anchor_hints=root_anchor_hints,
+            visual_candidates=visual_root_anchor_candidates,
         )
         root_anchor_local_steps = len(
             chart_root_anchor_local_region_boxes(
                 image,
                 rows,
                 anchor_candidates=root_anchor_candidates,
-                measure_indices=set(multi_chord_plan.measure_indices),
+                measure_indices=set(multi_chord_measure_indices),
                 source="cell_ocr_root_anchor",
             )
         )
@@ -412,7 +425,7 @@ def run_chord_chart_pipeline(
                     image,
                     rows,
                     anchor_candidates=root_anchor_candidates,
-                    measure_indices=set(multi_chord_plan.measure_indices),
+                    measure_indices=set(multi_chord_measure_indices),
                     region_allowlists=CHART_SEMANTIC_REGION_ALLOWLISTS,
                     source="cell_ocr_root_anchor",
                     progress_callback=_chart_ocr_progress_callback(
@@ -460,7 +473,7 @@ def run_chord_chart_pipeline(
         "multi_chord_supplemental_region_names": list(
             MULTI_CHORD_CHART_CELL_REGION_NAMES
         ),
-        "multi_chord_supplemental_measure_indices": multi_chord_plan.measure_indices,
+        "multi_chord_supplemental_measure_indices": multi_chord_measure_indices,
         "multi_chord_supplemental_ocr_calls": root_anchor_probe_steps,
         "multi_chord_supplemental_tokens": len(root_anchor_local_tokens),
         "multi_chord_supplemental_rejects": (
@@ -471,6 +484,15 @@ def run_chord_chart_pipeline(
         "multi_chord_anchor_candidates": [
             anchor.to_dict() for anchor in root_anchor_candidates
         ],
+        "multi_chord_visual_anchor_candidates": [
+            anchor.to_dict() for anchor in visual_root_anchor_candidates
+        ],
+        "multi_chord_visual_anchor_measure_indices": sorted(
+            visual_multi_chord_measure_indices
+        ),
+        "multi_chord_visual_supplemental_measure_indices": sorted(
+            visual_supplemental_measure_indices
+        ),
         "multi_chord_anchor_local_ocr_calls": root_anchor_local_steps,
         "multi_chord_anchor_local_tokens": len(root_anchor_local_tokens),
         "multi_chord_anchor_local_rejects": len(root_anchor_local_rejects),
@@ -496,7 +518,7 @@ def run_chord_chart_pipeline(
         *chart_cell_ocr_region_boxes(
             image,
             rows,
-            measure_indices=set(multi_chord_plan.measure_indices),
+            measure_indices=set(multi_chord_measure_indices),
             region_names=MULTI_CHORD_CHART_CELL_REGION_NAMES,
             source="cell_ocr_root_anchor_probe",
         ),
@@ -504,7 +526,7 @@ def run_chord_chart_pipeline(
             image,
             rows,
             anchor_candidates=root_anchor_candidates,
-            measure_indices=set(multi_chord_plan.measure_indices),
+            measure_indices=set(multi_chord_measure_indices),
             source="cell_ocr_root_anchor",
         ),
     ]
@@ -534,9 +556,30 @@ def run_chord_chart_pipeline(
         scan_regions=scan_regions,
         output_dir=output_dir,
     )
+    scan_boundary_overlay_path = write_chord_chart_scan_boundary_overlay(
+        image=image,
+        pages=result_payload["pages"],
+        scan_regions=scan_regions,
+        chart_ocr=result_payload["chart_ocr"],
+        output_dir=output_dir,
+    )
+    root_ocr_bbox_overlay_path = write_chord_chart_root_ocr_bbox_overlay(
+        image=image,
+        pages=result_payload["pages"],
+        chart_ocr=result_payload["chart_ocr"],
+        output_dir=output_dir,
+    )
     result_payload["overlay_file"] = overlay_path.name
     result_payload["debug_overlay_file"] = debug_overlay_path.name
+    result_payload["scan_boundary_overlay_file"] = scan_boundary_overlay_path.name
+    result_payload["root_ocr_bbox_overlay_file"] = root_ocr_bbox_overlay_path.name
     result_payload["chart_ocr"]["debug_overlay_file"] = debug_overlay_path.name
+    result_payload["chart_ocr"]["scan_boundary_overlay_file"] = (
+        scan_boundary_overlay_path.name
+    )
+    result_payload["chart_ocr"]["root_ocr_bbox_overlay_file"] = (
+        root_ocr_bbox_overlay_path.name
+    )
     _report_progress(
         progress_callback,
         progress=97,

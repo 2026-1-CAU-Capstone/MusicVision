@@ -66,7 +66,6 @@ def parse_chord_chart_image(
         raise ValueError("Could not detect chord-chart measure grid.")
 
     warnings: list[str] = []
-    has_cell_tokens = any(token.source.startswith("cell_ocr") for token in tokens)
     time_signature = _extract_time_signature(tokens, rows)
     if time_signature is None:
         if _has_visible_time_signature_region(image, rows):
@@ -94,6 +93,7 @@ def parse_chord_chart_image(
     _apply_visual_endings(image, rows)
 
     measures = _build_measure_cells(rows)
+    cell_token_measure_indices = _cell_token_measure_indices(tokens, measures)
     accepted_tokens: list[dict[str, Any]] = []
     detected_symbols: list[dict[str, Any]] = []
     unassigned_tokens: list[dict[str, Any]] = []
@@ -159,7 +159,10 @@ def parse_chord_chart_image(
             detected_symbols.append(navigation)
             continue
 
-        if has_cell_tokens and not token.source.startswith("cell_ocr"):
+        if (
+            measure.index in cell_token_measure_indices
+            and not token.source.startswith("cell_ocr")
+        ):
             continue
 
         repeat_symbol = _parse_repeat_symbol(token)
@@ -502,6 +505,22 @@ def _build_measure_cells(rows: list[ChartRow]) -> list[MeasureCell]:
             measure_index += 1
 
     return measures
+
+
+def _cell_token_measure_indices(
+    tokens: list[OCRToken],
+    measures: list[MeasureCell],
+) -> set[int]:
+    indices: set[int] = set()
+    for token in tokens:
+        if not token.source.startswith("cell_ocr"):
+            continue
+
+        measure = _measure_for_token(token, measures)
+        if measure is not None:
+            indices.add(measure.index)
+
+    return indices
 
 
 def _extract_metadata(

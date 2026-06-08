@@ -109,6 +109,75 @@ The `slash_bass_below_root` crop was tested separately, but it picked up
 navigation text in later measures, so slash-bass fallback should be conditional
 rather than part of the default suspicious-measure crop set.
 
+## 2026-06-07 Root-anchor multi-chord and upscaling checks
+
+### Autumn Leaves root-anchor run
+
+Input:
+
+```text
+resources/chord_charts/autumn_leaves_chord_chart.jpg
+```
+
+Saved job:
+
+```text
+storage/jobs/chart-debug-autumn-leaves-root-anchor-suffix-20260607
+```
+
+| Metric | Value |
+| --- | ---: |
+| elapsed time | `92.90s` |
+| page OCR | `31.72s` |
+| semantic/root-anchor OCR | `60.95s` |
+| detected measures | `24` |
+| public chord events | `26` |
+| core semantic OCR calls | `72` |
+| root-anchor probe OCR calls | `2` |
+| root-anchor local OCR calls | `12` |
+| root anchors | `4` |
+
+The target multi-chord measures were recovered as:
+
+```text
+measure 19: Gm7, Gb7
+measure 20: Fm7, E7
+```
+
+### Body and Soul upscaled root-anchor run
+
+Input:
+
+```text
+resources/chord_charts/body_and_soul-johnny_green-chord_chart.png
+```
+
+Saved job:
+
+```text
+storage/jobs/chart-debug-body-and-soul-root-anchor-20260607
+```
+
+| Metric | Value |
+| --- | ---: |
+| input size | `599x720` |
+| processing size | `1198x1440` |
+| elapsed time | `117.58s` |
+| page OCR | `26.09s` |
+| semantic/root-anchor OCR | `91.18s` |
+| detected measures | `25` |
+| public chord events | `34` |
+| core semantic OCR calls | `75` |
+| root-anchor probe OCR calls | `15` |
+| root-anchor local OCR calls | `100` |
+| root anchors | `37` |
+
+Upscaling fixed the earlier grid-detection failure where only one measure cell
+was detected. The remaining cost and accuracy issue is root-anchor
+over-selection on dense/noisy measures. This run should be used as a diagnostic
+baseline for anchor pruning, not as evidence that dense-chart multi-chord
+selection is finished.
+
 ## Notes
 
 The current chart parser runs EasyOCR over the full page and over multiple

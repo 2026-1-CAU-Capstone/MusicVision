@@ -33,6 +33,10 @@ REGION_COLOURS = {
     "root": (30, 110, 235),
     "root_accidental": (155, 80, 210),
     "suffix_lower_right": (235, 130, 20),
+    "root_anchor_scan": (30, 110, 235),
+    "root_wide": (30, 110, 235),
+    "root_accidental_wide": (155, 80, 210),
+    "suffix_wide": (235, 130, 20),
     "slash_bass_below_root": (30, 170, 155),
 }
 MEASURE_COLOUR = (70, 70, 70)

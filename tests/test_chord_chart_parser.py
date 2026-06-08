@@ -74,6 +74,79 @@ def test_chord_chart_parser_handles_grid_symbols_and_flow() -> None:
     assert payload["chart_ocr"]["detected_symbols"][-1]["type"] == "dc_al_ending"
 
 
+def test_chord_chart_parser_recovers_visual_section_marker_without_ocr_token() -> None:
+    image = np.full((1060, 520, 3), 255, dtype=np.uint8)
+    rows = []
+    x_positions = [60, 160, 260, 360, 460]
+    y_tops = [100, 210, 320, 430, 540, 650, 760, 870]
+    for index, y_top in enumerate(y_tops, start=1):
+        y_bottom = y_top + 90
+        for x in x_positions:
+            cv2.line(image, (x, y_top), (x, y_bottom), (0, 0, 0), 4)
+        rows.append(
+            ChartRow(
+                index=index,
+                y_top=y_top,
+                y_bottom=y_bottom,
+                boundaries=[
+                    Boundary(x, y_top, y_bottom, 1)
+                    for x in x_positions
+                ],
+            )
+        )
+
+    for row, section in (
+        (rows[0], "A"),
+        (rows[2], "B"),
+        (rows[4], "A"),
+        (rows[6], "C"),
+    ):
+        x0 = 10
+        y0 = int(row.y_top - 40)
+        x1 = 42
+        y1 = int(row.y_top - 3)
+        cv2.rectangle(image, (x0, y0), (x1, y1), (0, 0, 0), -1)
+        cv2.putText(
+            image,
+            section,
+            (x0 + 3, y1 - 5),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.2,
+            (255, 255, 255),
+            3,
+            cv2.LINE_AA,
+        )
+
+    tokens = [
+        OCRToken("A", (10, 60, 42, 97), 0.99, source="page_ocr"),
+        OCRToken("B", (10, 280, 42, 317), 0.99, source="page_ocr"),
+        OCRToken("A", (10, 500, 42, 537), 0.99, source="page_ocr"),
+    ]
+
+    payload = parse_chord_chart_image(
+        image=image,
+        tokens=tokens,
+        ocr_rejects=[],
+        job_id="chart-job",
+        source_file="chart.png",
+        rows=rows,
+    )
+
+    assert payload["flow"]["sections"] == [
+        {"section": "A", "start_measure_index": 1, "end_measure_index": 8},
+        {"section": "B", "start_measure_index": 9, "end_measure_index": 16},
+        {"section": "A", "start_measure_index": 17, "end_measure_index": 24},
+        {"section": "C", "start_measure_index": 25, "end_measure_index": 32},
+    ]
+    assert payload["pages"][0]["systems"][6]["section"] == "C"
+    assert any(
+        token["kind"] == "section_marker"
+        and token["source"] == "visual_section_detection"
+        and token["text"] == "C"
+        for token in payload["chart_ocr"]["accepted_tokens"]
+    )
+
+
 def test_chord_chart_parser_deduplicates_navigation_across_ocr_passes() -> None:
     image = np.full((260, 360, 3), 255, dtype=np.uint8)
     rows = [

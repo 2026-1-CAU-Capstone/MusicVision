@@ -8,7 +8,7 @@ from homr.simple_logging import eprint
 
 
 def download_file(url: str, filename: str) -> None:
-    response = requests.get(url, stream=True, timeout=5)
+    response = requests.get(url, stream=True, timeout=120)
     total = int(response.headers.get("content-length", 0))
     totalMb = round(total / 1024 / 1024)
     last_percent = -1

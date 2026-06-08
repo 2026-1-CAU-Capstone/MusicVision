@@ -44,7 +44,52 @@ def test_chart_cell_ocr_uses_region_specific_allowlists(monkeypatch) -> None:
 
     assert tokens == []
     assert rejects == []
-    assert [call.get("allowlist") for call in calls] == ["ABC", "789"]
+    assert [call.get("allowlist") for call in calls] == ["ABC", "ABC", "789"]
+
+
+def test_chart_cell_root_ocr_retries_narrow_left_crop(monkeypatch) -> None:
+    calls = 0
+
+    class FakeReader:
+        def readtext(self, _image, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return []
+            return [([(3, 4), (18, 4), (18, 24), (3, 24)], "C", 0.94)]
+
+    monkeypatch.setattr(ocr_backend, "_get_reader", lambda gpu=False: FakeReader())
+    monkeypatch.setattr(ocr_backend, "preprocess_for_ocr", lambda image, scale: image)
+
+    rows = [
+        SimpleNamespace(
+            index=1,
+            y_top=35.0,
+            y_bottom=75.0,
+            boundaries=[
+                SimpleNamespace(x=0.0),
+                SimpleNamespace(x=140.0),
+            ],
+        )
+    ]
+
+    tokens, rejects = ocr_backend.extract_chart_cell_ocr_tokens(
+        np.full((150, 160, 3), 255, dtype=np.uint8),
+        rows,
+        ocr_scale=1.0,
+        region_names=("root",),
+        region_allowlists={"root": "ABCDEFG"},
+    )
+
+    assert rejects == []
+    assert [token.text for token in tokens] == ["C"]
+    assert tokens[0].debug == {
+        "ocr_crop_fallback": {
+            "region": "root",
+            "reason": "empty_primary_root_result",
+            "x_end_fraction_of_primary": 0.72,
+        }
+    }
 
 
 def test_chart_cell_ocr_normalizes_visual_minor_dash(monkeypatch) -> None:
@@ -231,6 +276,28 @@ def test_visual_root_anchor_candidates_use_first_root_height_for_squished_roots(
     assert [round(anchor.center_x) for anchor in visual_anchors] == [74, 172]
 
 
+def test_visual_root_anchor_candidates_keep_skinny_root_height_components() -> None:
+    rows = [
+        SimpleNamespace(
+            index=1,
+            y_top=60.0,
+            y_bottom=130.0,
+            boundaries=[
+                SimpleNamespace(x=20.0),
+                SimpleNamespace(x=300.0),
+            ],
+        )
+    ]
+    image = np.full((190, 340, 3), 255, dtype=np.uint8)
+    cv2.rectangle(image, (54, 64), (92, 132), (0, 0, 0), -1)
+    cv2.rectangle(image, (172, 65), (176, 131), (0, 0, 0), -1)
+
+    visual_anchors = ocr_backend.detect_visual_root_anchor_candidates(image, rows)
+
+    assert len(visual_anchors) == 2
+    assert [round(anchor.center_x) for anchor in visual_anchors] == [74, 174]
+
+
 def test_visual_root_anchor_candidates_cut_group_when_root_is_between_components() -> None:
     rows = [
         SimpleNamespace(
@@ -352,7 +419,152 @@ def test_root_anchor_candidates_use_plan_hints_over_extra_scan_letters() -> None
     )
 
     assert [anchor.root for anchor in anchors] == ["G", "G"]
+    assert [anchor.center_x for anchor in anchors] == [74.0, 198.0]
     assert len(anchors) == 2
+
+
+def test_root_anchor_scan_is_fallback_when_visual_positions_exist() -> None:
+    rows = [
+        SimpleNamespace(
+            index=1,
+            y_top=20.0,
+            y_bottom=60.0,
+            boundaries=[
+                SimpleNamespace(x=0.0),
+                SimpleNamespace(x=260.0),
+            ],
+        )
+    ]
+    scan_token = ocr_backend.OCRToken(
+        "DGF",
+        (40.0, 24.0, 220.0, 58.0),
+        confidence=0.70,
+        source="cell_ocr_root_anchor_probe",
+        row_index=1,
+        col_index=1,
+        measure_index=1,
+        region="root_anchor_scan",
+    )
+    visual_anchor = ocr_backend.RootAnchorCandidate(
+        measure_index=1,
+        anchor_index=0,
+        root="?",
+        center_x=98.0,
+        bbox=(78.0, 24.0, 118.0, 58.0),
+        confidence=0.86,
+        source_text="visual_root_anchor",
+        source_bbox=(78.0, 24.0, 118.0, 58.0),
+        row_index=1,
+        col_index=1,
+    )
+
+    anchors = ocr_backend.build_root_anchor_candidates(
+        [scan_token],
+        image=np.full((140, 280, 3), 255, dtype=np.uint8),
+        rows=rows,
+        visual_candidates=[visual_anchor],
+    )
+
+    assert len(anchors) == 1
+    assert anchors[0].root == "D"
+    assert anchors[0].source_text == "visual_root_anchor:DGF"
+    assert anchors[0].center_x == 98.0
+    assert anchors[0].bbox == (78.0, 24.0, 118.0, 58.0)
+
+
+def test_unmatched_fragment_hints_do_not_add_anchors_when_visual_positions_exist() -> None:
+    rows = [
+        SimpleNamespace(
+            index=1,
+            y_top=20.0,
+            y_bottom=60.0,
+            boundaries=[
+                SimpleNamespace(x=0.0),
+                SimpleNamespace(x=260.0),
+            ],
+        )
+    ]
+    visual_anchors = [
+        ocr_backend.RootAnchorCandidate(
+            measure_index=1,
+            anchor_index=0,
+            root="?",
+            center_x=78.0,
+            bbox=(58.0, 24.0, 98.0, 58.0),
+            confidence=0.86,
+            source_text="visual_root_anchor",
+            source_bbox=(58.0, 24.0, 98.0, 58.0),
+            row_index=1,
+            col_index=1,
+            source_kind="visual_root_anchor",
+        ),
+        ocr_backend.RootAnchorCandidate(
+            measure_index=1,
+            anchor_index=0,
+            root="?",
+            center_x=198.0,
+            bbox=(178.0, 24.0, 218.0, 58.0),
+            confidence=0.86,
+            source_text="visual_root_anchor",
+            source_bbox=(178.0, 24.0, 218.0, 58.0),
+            row_index=1,
+            col_index=1,
+            source_kind="visual_root_anchor",
+        ),
+    ]
+    hints = [
+        {
+            "measure_index": 1,
+            "anchor_index": 1,
+            "root": "G",
+            "center_x": 74.0,
+            "bbox": [70.0, 24.0, 78.0, 58.0],
+            "confidence": 0.5,
+            "source_text": "G-",
+            "source_bbox": [40.0, 24.0, 120.0, 58.0],
+            "source_kind": "chord_like_fragment",
+            "row_index": 1,
+            "col_index": 1,
+        },
+        {
+            "measure_index": 1,
+            "anchor_index": 2,
+            "root": "G",
+            "center_x": 138.0,
+            "bbox": [134.0, 24.0, 142.0, 58.0],
+            "confidence": 0.5,
+            "source_text": "Ig-",
+            "source_bbox": [120.0, 24.0, 160.0, 58.0],
+            "source_kind": "chord_like_fragment",
+            "row_index": 1,
+            "col_index": 1,
+        },
+        {
+            "measure_index": 1,
+            "anchor_index": 3,
+            "root": "G",
+            "center_x": 202.0,
+            "bbox": [198.0, 24.0, 206.0, 58.0],
+            "confidence": 0.5,
+            "source_text": "G",
+            "source_bbox": [190.0, 24.0, 220.0, 58.0],
+            "source_kind": "chord_like_fragment",
+            "row_index": 1,
+            "col_index": 1,
+        },
+    ]
+
+    anchors = ocr_backend.build_root_anchor_candidates(
+        [],
+        image=np.full((140, 280, 3), 255, dtype=np.uint8),
+        rows=rows,
+        anchor_hints=hints,
+        visual_candidates=visual_anchors,
+    )
+
+    assert len(anchors) == 2
+    assert [anchor.root for anchor in anchors] == ["G", "G"]
+    assert [anchor.center_x for anchor in anchors] == [78.0, 198.0]
 
 
 def test_root_anchor_local_ocr_emits_normal_semantic_regions(monkeypatch) -> None:

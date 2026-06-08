@@ -476,7 +476,7 @@ def _scan_boundary_label(region: dict[str, Any]) -> str:
     if anchor is not None:
         label_parts.append(f"a{anchor}")
     label_parts.append(_short_region_name(region_name))
-    if source not in {"anchor", "cell"}:
+    if source:
         label_parts.append(source)
     return " ".join(label_parts)
 

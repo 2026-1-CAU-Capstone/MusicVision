@@ -94,3 +94,19 @@ def test_multi_chord_plan_flags_right_half_chord_like_fragment() -> None:
     assert "right_half_chord_like_fragment" in reasons
     hints = root_anchor_hints_from_plan(plan)
     assert [hint["root"] for hint in hints] == ["F", "E"]
+
+
+def test_multi_chord_plan_treats_root_only_chord_as_chord_like() -> None:
+    plan = plan_multi_chord_chart_cell_ocr(
+        rows=_rows(),
+        page_tokens=[
+            OCRToken("C", (285, 115, 335, 160), 0.95, "page_ocr"),
+        ],
+        row_tokens=[],
+    )
+
+    assert plan.measure_indices == [2]
+    reasons = plan.diagnostics["selected_measures"][0]["reasons"]
+    assert "right_half_chord_like_fragment" in reasons
+    hints = root_anchor_hints_from_plan(plan)
+    assert [hint["root"] for hint in hints] == ["C"]

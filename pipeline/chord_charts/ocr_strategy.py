@@ -592,6 +592,8 @@ def _is_chord_like_fragment(text: str) -> bool:
     compact = _compact_fragment(text)
     if len(compact) > 16:
         return False
+    if parse_chord_symbol(compact) is not None:
+        return True
     if re.search(r"[A-Ga-g]", compact) and re.search(r"[#b0-9zZmM+\-]", compact):
         return True
     return _is_suffix_like_fragment(compact)

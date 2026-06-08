@@ -100,9 +100,10 @@ class RootAnchorCandidate:
     source_bbox: tuple[float, float, float, float]
     row_index: int | None = None
     col_index: int | None = None
+    source_kind: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "measure_index": self.measure_index,
             "anchor_index": self.anchor_index,
             "root": self.root,
@@ -114,6 +115,9 @@ class RootAnchorCandidate:
             "row_index": self.row_index,
             "col_index": self.col_index,
         }
+        if self.source_kind is not None:
+            payload["source_kind"] = self.source_kind
+        return payload
 
 
 @dataclass(frozen=True)
@@ -247,8 +251,11 @@ def extract_chart_cell_ocr_tokens(
                     )
                     continue
 
-                processed = preprocess_for_ocr(subcrop, scale=ocr_scale)
-                inverse_scale = 1.0 / ocr_scale
+                read_subcrop = subcrop
+                read_rx0 = rx0
+                read_ry0 = ry0
+                read_scale = ocr_scale
+                processed = preprocess_for_ocr(read_subcrop, scale=read_scale)
                 results = _read_chart_text(
                     reader,
                     processed,
@@ -258,19 +265,52 @@ def extract_chart_cell_ocr_tokens(
                         else None
                     ),
                 )
+                fallback_debug: dict[str, Any] | None = None
+                if not results and region_name == "root":
+                    narrow_rx1 = rx0 + int((rx1 - rx0) * 0.72)
+                    if narrow_rx1 - rx0 >= 4 and narrow_rx1 < rx1:
+                        read_subcrop = crop[ry0:ry1, rx0:narrow_rx1]
+                        read_rx0 = rx0
+                        read_ry0 = ry0
+                        processed = preprocess_for_ocr(
+                            read_subcrop,
+                            scale=read_scale,
+                        )
+                        results = _read_chart_text(
+                            reader,
+                            processed,
+                            allowlist=(
+                                region_allowlists.get(region_name)
+                                if region_allowlists is not None
+                                else None
+                            ),
+                        )
+                        fallback_debug = {
+                            "ocr_crop_fallback": {
+                                "region": region_name,
+                                "reason": "empty_primary_root_result",
+                                "x_end_fraction_of_primary": 0.72,
+                            }
+                        }
+                inverse_scale = 1.0 / read_scale
 
                 for points, text, confidence in results:
                     raw_text, debug = _normalize_cell_region_text(
                         region_name,
                         (text or "").strip(),
-                        subcrop,
+                        read_subcrop,
                     )
+                    if fallback_debug is not None:
+                        debug = {
+                            **(debug or {}),
+                            **fallback_debug,
+                        }
                     if not raw_text:
                         continue
 
                     confidence_value = float(confidence)
-                    xs = [x0 + rx0 + point[0] * inverse_scale for point in points]
-                    ys = [y0 + ry0 + point[1] * inverse_scale for point in points]
+                    xs = [x0 + read_rx0 + point[0] * inverse_scale for point in points]
+                    ys = [y0 + read_ry0 + point[1] * inverse_scale for point in points]
                     bbox = (float(min(xs)), float(min(ys)), float(max(xs)), float(max(ys)))
                     record = {
                         "text": raw_text,
@@ -699,15 +739,13 @@ def build_root_anchor_candidates(
                 [*raw_by_measure[measure_index], *hints_by_measure[measure_index]]
             )
         )
+        visual_candidates_for_measure = visual_by_measure[measure_index]
         measure_candidates = _root_anchor_candidates_for_measure(
             scan_candidates=raw_by_measure[measure_index],
             hint_candidates=hints_by_measure[measure_index],
+            visual_candidates=visual_candidates_for_measure,
             measure_width=measure_width,
         )
-        measure_candidates = [
-            *visual_by_measure[measure_index],
-            *measure_candidates,
-        ]
         threshold = max(30.0, measure_width * 0.10)
         groups: list[list[RootAnchorCandidate]] = []
         for candidate in sorted(
@@ -743,6 +781,7 @@ def build_root_anchor_candidates(
                     source_bbox=candidate.source_bbox,
                     row_index=candidate.row_index,
                     col_index=candidate.col_index,
+                    source_kind=candidate.source_kind,
                 )
             )
 
@@ -1016,6 +1055,7 @@ def _visual_root_anchor_candidates_from_scan(
                 source_bbox=source_bbox,
                 row_index=scan.row_index,
                 col_index=scan.col_index,
+                source_kind="visual_root_anchor",
             )
         )
     return candidates
@@ -1032,10 +1072,10 @@ def _visual_root_sized_components(
         connectivity=8,
     )
     band_height, band_width = binary.shape[:2]
-    min_height = max(28.0, band_height * 0.30)
-    min_width = max(8.0, band_width * 0.025)
+    min_height = max(24.0, band_height * 0.24)
+    min_width = max(3.0, band_width * 0.008)
     max_width = max(52.0, band_width * 0.50)
-    min_area = max(90.0, band_width * band_height * 0.003)
+    min_area = max(35.0, band_width * band_height * 0.0012)
     components: list[dict[str, float]] = []
 
     for index in range(1, count):
@@ -1045,9 +1085,9 @@ def _visual_root_sized_components(
         if area < min_area:
             continue
         aspect = width / max(height, 1.0)
-        if not 0.10 <= aspect <= 1.60:
+        if not 0.04 <= aspect <= 1.80:
             continue
-        if y > band_height * 0.46:
+        if y > band_height * 0.55:
             continue
 
         components.append(
@@ -1223,6 +1263,7 @@ def _split_root_anchor_token(token: OCRToken) -> list[RootAnchorCandidate]:
                 source_bbox=token.bbox,
                 row_index=token.row_index,
                 col_index=token.col_index,
+                source_kind=token.region,
             )
         )
     return candidates
@@ -1258,6 +1299,7 @@ def _root_anchor_candidate_from_hint(
         source_bbox=source_bbox,
         row_index=int(hint["row_index"]) if hint.get("row_index") is not None else None,
         col_index=int(hint["col_index"]) if hint.get("col_index") is not None else None,
+        source_kind=str(hint.get("source_kind") or "") or None,
     )
 
 
@@ -1265,22 +1307,87 @@ def _root_anchor_candidates_for_measure(
     *,
     scan_candidates: list[RootAnchorCandidate],
     hint_candidates: list[RootAnchorCandidate],
+    visual_candidates: list[RootAnchorCandidate],
     measure_width: float,
 ) -> list[RootAnchorCandidate]:
-    if not hint_candidates:
-        return scan_candidates
-
-    refined = [
-        _refine_root_anchor_hint(
-            hint,
+    if hint_candidates and visual_candidates:
+        return _merge_planned_root_anchor_candidates(
+            hint_candidates=hint_candidates,
+            visual_candidates=visual_candidates,
             scan_candidates=scan_candidates,
             measure_width=measure_width,
         )
-        for hint in hint_candidates
-    ]
-    if len(refined) >= 2:
-        return refined
-    return [*refined, *scan_candidates]
+    if hint_candidates:
+        return [
+            _refine_root_anchor_hint(
+                hint,
+                scan_candidates=scan_candidates,
+                measure_width=measure_width,
+            )
+            for hint in hint_candidates
+        ]
+    if visual_candidates:
+        return [
+            _refine_visual_anchor_candidate(
+                candidate,
+                scan_candidates=scan_candidates,
+                measure_width=measure_width,
+            )
+            for candidate in visual_candidates
+        ]
+    return scan_candidates
+
+
+def _merge_planned_root_anchor_candidates(
+    *,
+    hint_candidates: list[RootAnchorCandidate],
+    visual_candidates: list[RootAnchorCandidate],
+    scan_candidates: list[RootAnchorCandidate],
+    measure_width: float,
+) -> list[RootAnchorCandidate]:
+    max_distance = max(34.0, measure_width * 0.15)
+    unmatched_hints = list(hint_candidates)
+    merged: list[RootAnchorCandidate] = []
+
+    for visual in sorted(visual_candidates, key=lambda item: item.center_x):
+        nearby_hints = [
+            hint
+            for hint in unmatched_hints
+            if abs(hint.center_x - visual.center_x) <= max_distance
+        ]
+        if nearby_hints:
+            hint = min(
+                nearby_hints,
+                key=lambda item: abs(item.center_x - visual.center_x),
+            )
+            unmatched_hints.remove(hint)
+            merged.append(
+                _anchor_with_root_from_candidate(
+                    visual,
+                    root_candidate=hint,
+                    source_prefix="visual_root_anchor",
+                )
+            )
+        else:
+            merged.append(
+                _refine_visual_anchor_candidate(
+                    visual,
+                    scan_candidates=scan_candidates,
+                    measure_width=measure_width,
+                )
+            )
+
+    for hint in unmatched_hints:
+        if hint.source_kind == "chord_like_fragment":
+            continue
+        merged.append(
+            _refine_root_anchor_hint(
+                hint,
+                scan_candidates=scan_candidates,
+                measure_width=measure_width,
+            )
+        )
+    return merged
 
 
 def _refine_root_anchor_hint(
@@ -1300,17 +1407,60 @@ def _refine_root_anchor_hint(
         return hint
 
     best = min(matches, key=lambda candidate: abs(candidate.center_x - hint.center_x))
+    return _anchor_with_root_from_candidate(
+        hint,
+        root_candidate=best,
+        source_prefix="root_anchor_hint",
+    )
+
+
+def _refine_visual_anchor_candidate(
+    candidate: RootAnchorCandidate,
+    *,
+    scan_candidates: list[RootAnchorCandidate],
+    measure_width: float,
+) -> RootAnchorCandidate:
+    max_distance = max(34.0, measure_width * 0.15)
+    matches = [
+        scan_candidate
+        for scan_candidate in scan_candidates
+        if abs(scan_candidate.center_x - candidate.center_x) <= max_distance
+    ]
+    if not matches:
+        return candidate
+
+    best = min(matches, key=lambda item: abs(item.center_x - candidate.center_x))
+    return _anchor_with_root_from_candidate(
+        candidate,
+        root_candidate=best,
+        source_prefix="visual_root_anchor",
+    )
+
+
+def _anchor_with_root_from_candidate(
+    anchor: RootAnchorCandidate,
+    *,
+    root_candidate: RootAnchorCandidate,
+    source_prefix: str,
+) -> RootAnchorCandidate:
+    confidence_values = [
+        float(value)
+        for value in (anchor.confidence, root_candidate.confidence)
+        if isinstance(value, int | float)
+    ]
+    confidence = max(confidence_values) if confidence_values else anchor.confidence
     return RootAnchorCandidate(
-        measure_index=best.measure_index,
-        anchor_index=hint.anchor_index,
-        root=best.root,
-        center_x=best.center_x,
-        bbox=best.bbox,
-        confidence=best.confidence,
-        source_text=best.source_text,
-        source_bbox=best.source_bbox,
-        row_index=best.row_index,
-        col_index=best.col_index,
+        measure_index=anchor.measure_index,
+        anchor_index=anchor.anchor_index,
+        root=root_candidate.root,
+        center_x=anchor.center_x,
+        bbox=anchor.bbox,
+        confidence=confidence,
+        source_text=f"{source_prefix}:{root_candidate.source_text}",
+        source_bbox=anchor.source_bbox,
+        row_index=anchor.row_index,
+        col_index=anchor.col_index,
+        source_kind=anchor.source_kind,
     )
 
 
@@ -1354,12 +1504,12 @@ def _root_anchor_local_region_boxes(
         my0,
         measure_height,
         0.0,
-        0.50,
+        0.45,
     )
     suffix_y0, suffix_y1 = _measure_relative_y_bounds(
         my0,
         measure_height,
-        0.34,
+        0.40,
         0.76,
     )
 
@@ -1367,7 +1517,7 @@ def _root_anchor_local_region_boxes(
         (
             "root",
             (
-                cx - measure_width * 0.13,
+                cx - measure_width * 0.10,
                 root_y0,
                 min(cx + measure_width * 0.15, right_limit),
                 root_y1,
@@ -1376,7 +1526,7 @@ def _root_anchor_local_region_boxes(
         (
             "root_accidental",
             (
-                cx + measure_width * 0.01,
+                cx + measure_width * 0.07,
                 accidental_y0,
                 min(cx + measure_width * 0.20, right_limit),
                 accidental_y1,
@@ -1385,7 +1535,7 @@ def _root_anchor_local_region_boxes(
         (
             "suffix_lower_right",
             (
-                cx - measure_width * 0.02,
+                cx + measure_width * 0.09,
                 suffix_y0,
                 min(cx + measure_width * 0.46, right_limit),
                 suffix_y1,
@@ -1435,8 +1585,8 @@ def _cell_ocr_regions() -> list[tuple[str, float, float, float, float]]:
         ("right", 0.42, 1.0, 0.0, 1.0),
         ("low", 0.0, 1.0, 0.55, 1.0),
         ("root", 0.0, 0.28, 0.05, 0.77),
-        ("root_accidental", 0.16, 0.33, 0.0, 0.50),
-        ("suffix_lower_right", 0.20, 0.55, 0.34, 0.76),
+        ("root_accidental", 0.18, 0.33, 0.0, 0.45),
+        ("suffix_lower_right", 0.20, 0.55, 0.40, 0.76),
         ("root_anchor_scan", 0.0, 1.0, 0.05, 0.77),
         ("root_wide", 0.0, 1.0, 0.05, 0.77),
         ("root_accidental_wide", 0.0, 1.0, 0.0, 0.42),

@@ -461,6 +461,7 @@ def main() -> None:
         encoding="utf-8",
     )
 
+    print(f"wrote {overlay_path}")
     print(f"wrote {chord_chart_path}")
     print(f"wrote {chord_chart_debug_path}")
     print(f"wrote {debug_overlay_path}")

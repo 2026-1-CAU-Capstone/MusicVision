@@ -766,6 +766,44 @@ Verification:
 .venv\Scripts\python.exe -m pytest tests\test_chord_chart_parser.py tests\test_chord_chart_symbols.py
 ```
 
+## Preview root-anchor probe regions
+
+```powershell
+python .\scripts\render_chord_chart_crop_regions.py .\resources\chord_charts\autumn_leaves_chord_chart.jpg --regions root_anchor_scan --measure-indices 19,20
+```
+
+The multi-chord path uses `root_anchor_scan` only to find likely chord starts.
+Final chord names come from anchor-local `root`, `root_accidental`, and
+`suffix_lower_right` OCR boxes.
+
+## Chord chart OCR trials and current behavior
+
+### Glyph and semantic-crop trials
+
+- `suffix_lower_right` text is normalized at the OCR-crop boundary before chord grammar parsing. This is where visual fixes for minor dash, diminished, half-diminished, triangle/major, and numeric-flat suffix reads should live.
+- Semantic assembly combines separate `root`, `root_accidental`, and `suffix_lower_right` OCR tokens. Root-only chords such as `C` are valid when there is no nearby suffix evidence.
+- If OCR sees a nearby suffix crop but the suffix cannot be parsed, semantic assembly rejects that partial chord instead of publishing only the root. This prevents outputs such as `Gb` when the chart likely contains `Gb7`.
+- The fixed first-chord root crop retries a narrower left crop when the primary `root` crop returns no OCR result. This is meant for horizontally crowded first chords near a measure line.
+
+### Multi-chord anchor planning
+
+- Multi-chord planning still uses OCR spacing as the first signal.
+- A root-only OCR fragment such as `C` now counts as chord-like evidence.
+- Visual root-height anchors use connected components whose height matches the row's first root. The component does not have to be OCR-recognized as a root letter; it only needs to look root-sized on the same y band.
+- Root-anchor probing now uses planned/visual x-coordinates for anchor-local crop placement. `root_anchor_scan` may provide a nearby root letter, but it no longer creates extra anchors when planned/visual positions already exist.
+- If visual anchors already exist, unmatched `chord_like_fragment` hints are skipped. This prevents malformed fragments such as `Ig-` from adding a false middle anchor between two real root-height anchors.
+
+### 2026-06-08 trial outputs
+
+- Autumn Leaves: `chart-debug-autumn-leaves-anchor-planmerge-20260608`
+  - m19 now has two root-anchor candidates, not three: x=936.5 and x=1143.5.
+  - Current semantic output still drops the second chord because the second suffix OCR is invalid.
+  - Current semantic output reads m19 first chord as `Gm7`, so accidental attachment for the first `Gb` is still unstable.
+- Body and Soul: `chart-debug-body-and-soul-anchor-planmerge-20260608`
+  - m07 has three root-anchor candidates: x=646.0, x=777.5, and x=848.5.
+  - Current semantic output still rejects `Ab` in m07 because suffix OCR is invalid.
+  - m04 detects the second root anchor `E`, but semantic assembly rejects it because the diminished/seventh suffix OCR is invalid.
+
 ## Current limits
 
 The chord-chart parser is still designed for clean grid charts. It is not a

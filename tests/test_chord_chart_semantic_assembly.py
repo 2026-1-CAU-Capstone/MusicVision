@@ -172,6 +172,16 @@ def test_semantic_assembly_rejects_nearby_invalid_numeric_suffix() -> None:
     assert result.diagnostics[0]["reason"] == "nearby suffix OCR was invalid"
 
 
+def test_semantic_assembly_accepts_root_only_chord_without_suffix_evidence() -> None:
+    result = assemble_semantic_chord_tokens(
+        [
+            _token("C", (10.0, 10.0, 30.0, 40.0), region="root"),
+        ]
+    )
+
+    assert [token.text for token in result.tokens] == ["C"]
+
+
 def test_semantic_assembly_ignores_root_overlap_suffix_body() -> None:
     result = assemble_semantic_chord_tokens(
         [

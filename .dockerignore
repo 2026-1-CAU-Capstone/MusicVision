@@ -28,3 +28,6 @@ homr/*.onnx
 homr/**/*.onnx
 homr/*.pth
 homr/**/*.pth
+
+!homr/homr/segmentation/*.onnx
+!homr/homr/transformer/*.onnx

@@ -15,15 +15,28 @@ if str(REPO_ROOT) not in sys.path:
 
 from pipeline.chord_charts.ocr_backend import (
     CHART_SEMANTIC_REGION_ALLOWLISTS,
+    MULTI_CHORD_CHART_CELL_REGION_NAMES,
     SEMANTIC_CHART_CELL_REGION_NAMES,
     _cell_ocr_regions,
+    build_root_anchor_candidates,
     chart_cell_ocr_region_boxes,
+    chart_root_anchor_local_region_boxes,
+    detect_visual_root_anchor_candidates,
     extract_chart_cell_ocr_tokens,
     extract_chart_ocr_tokens,
+    extract_chart_root_anchor_local_ocr_tokens,
+    measure_indices_with_multiple_root_anchors,
 )
+from pipeline.chord_charts.image_preprocessing import upscale_small_chord_chart_image
 from pipeline.chord_charts.overlay import (
     write_chord_chart_ocr_debug_overlay,
     write_chord_chart_overlay,
+    write_chord_chart_root_ocr_bbox_overlay,
+    write_chord_chart_scan_boundary_overlay,
+)
+from pipeline.chord_charts.ocr_strategy import (
+    plan_multi_chord_chart_cell_ocr,
+    root_anchor_hints_from_plan,
 )
 from pipeline.chord_charts.parser import detect_chart_grid, parse_chord_chart_image
 from pipeline.chord_charts.public_payload import build_public_chord_chart_payload
@@ -51,14 +64,24 @@ def main() -> None:
         intermediate_dir=intermediate_dir,
     )
     image = load_rgb_image(preprocessed_input_path)
+    image_scale = upscale_small_chord_chart_image(image)
+    image = image_scale.image
+    if image_scale.scale != 1.0:
+        print(
+            "upscaled image: "
+            f"{image_scale.original_width}x{image_scale.original_height} -> "
+            f"{image_scale.width}x{image_scale.height} "
+            f"({image_scale.scale:.2f}x)"
+        )
     rows = detect_chart_grid(image)
     if not rows:
         raise SystemExit("No chord-chart grid was detected.")
 
+    semantic_mode = args.regions.strip() == "semantic"
     region_names = _parse_regions(args.regions)
     measure_indices = _parse_measure_indices(args.measure_indices)
     allowlists = None if args.no_allowlists else CHART_SEMANTIC_REGION_ALLOWLISTS
-    expected_cell_ocr_calls = _count_expected_cell_calls(
+    expected_core_cell_ocr_calls = _count_expected_cell_calls(
         rows,
         region_count=len(region_names),
         measure_indices=measure_indices,
@@ -93,12 +116,61 @@ def main() -> None:
         )
         print(
             "repeat probe: "
-            f"{len(repeat_measure_indices)} measure(s) skipped for semantic chords"
+            f"{len(repeat_measure_indices)} visual repeat candidate measure(s)"
         )
 
+    multi_chord_plan = None
+    supplemental_measure_indices: set[int] = set()
+    visual_root_anchor_candidates = []
+    visual_multi_chord_measure_indices: set[int] = set()
+    visual_supplemental_measure_indices: set[int] = set()
+    if semantic_mode:
+        if page_tokens:
+            multi_chord_plan = plan_multi_chord_chart_cell_ocr(
+                rows=rows,
+                page_tokens=page_tokens,
+                row_tokens=[],
+            )
+            supplemental_measure_indices = set(multi_chord_plan.measure_indices)
+            if measure_indices is not None:
+                supplemental_measure_indices &= set(measure_indices)
+        elif measure_indices is not None:
+            supplemental_measure_indices = set(measure_indices)
+        elif args.no_page_ocr:
+            supplemental_measure_indices = _all_measure_indices(rows)
+        visual_root_anchor_candidates = detect_visual_root_anchor_candidates(
+            image,
+            rows,
+            measure_indices=measure_indices,
+        )
+        visual_multi_chord_measure_indices = measure_indices_with_multiple_root_anchors(
+            visual_root_anchor_candidates
+        )
+        visual_supplemental_measure_indices = set(visual_multi_chord_measure_indices)
+        if measure_indices is not None:
+            visual_supplemental_measure_indices &= set(measure_indices)
+        supplemental_measure_indices |= visual_supplemental_measure_indices
+        if visual_multi_chord_measure_indices:
+            print(
+                "visual root anchors: "
+                f"{len(visual_root_anchor_candidates)} candidate(s), "
+                f"{len(visual_multi_chord_measure_indices)} multi-anchor measure(s), "
+                f"{len(visual_supplemental_measure_indices)} supplemental measure(s)"
+            )
+
+    expected_root_anchor_probe_ocr_calls = _count_expected_cell_calls(
+        rows,
+        region_count=len(MULTI_CHORD_CHART_CELL_REGION_NAMES),
+        measure_indices=supplemental_measure_indices,
+    )
+    expected_cell_ocr_calls = (
+        expected_core_cell_ocr_calls + expected_root_anchor_probe_ocr_calls
+    )
     print(
         "running semantic cell OCR: "
-        f"{expected_cell_ocr_calls} calls across {len(region_names)} regions..."
+        f"{expected_cell_ocr_calls} calls "
+        f"({expected_core_cell_ocr_calls} core, "
+        f"{expected_root_anchor_probe_ocr_calls} root-anchor probe)..."
     )
     cell_start = time.perf_counter()
     last_progress_print = 0.0
@@ -120,6 +192,65 @@ def main() -> None:
         source="cell_ocr_semantic",
         progress_callback=report_cell_progress,
     )
+    root_anchor_probe_tokens = []
+    root_anchor_probe_rejects = []
+    root_anchor_candidates = []
+    root_anchor_local_tokens = []
+    root_anchor_local_rejects = []
+    root_anchor_local_ocr_calls = 0
+    if supplemental_measure_indices:
+        root_anchor_hints = (
+            root_anchor_hints_from_plan(multi_chord_plan)
+            if multi_chord_plan is not None
+            else []
+        )
+        root_anchor_probe_tokens, root_anchor_probe_rejects = (
+            extract_chart_cell_ocr_tokens(
+                image,
+                rows,
+                measure_indices=supplemental_measure_indices,
+                region_names=MULTI_CHORD_CHART_CELL_REGION_NAMES,
+                region_allowlists=allowlists,
+                source="cell_ocr_root_anchor_probe",
+                progress_callback=report_cell_progress,
+            )
+        )
+        cell_rejects.extend(root_anchor_probe_rejects)
+        root_anchor_candidates = build_root_anchor_candidates(
+            root_anchor_probe_tokens,
+            image=image,
+            rows=rows,
+            measure_indices=supplemental_measure_indices,
+            anchor_hints=root_anchor_hints,
+            visual_candidates=visual_root_anchor_candidates,
+        )
+        root_anchor_local_boxes = chart_root_anchor_local_region_boxes(
+            image,
+            rows,
+            anchor_candidates=root_anchor_candidates,
+            measure_indices=supplemental_measure_indices,
+            source="cell_ocr_root_anchor",
+        )
+        root_anchor_local_ocr_calls = len(root_anchor_local_boxes)
+        if root_anchor_local_ocr_calls:
+            print(
+                "running root-anchor local OCR: "
+                f"{root_anchor_local_ocr_calls} calls "
+                f"from {len(root_anchor_candidates)} anchor(s)..."
+            )
+            root_anchor_local_tokens, root_anchor_local_rejects = (
+                extract_chart_root_anchor_local_ocr_tokens(
+                    image,
+                    rows,
+                    anchor_candidates=root_anchor_candidates,
+                    measure_indices=supplemental_measure_indices,
+                    region_allowlists=allowlists,
+                    source="cell_ocr_root_anchor",
+                    progress_callback=report_cell_progress,
+                )
+            )
+            cell_tokens.extend(root_anchor_local_tokens)
+            cell_rejects.extend(root_anchor_local_rejects)
     cell_runtime = time.perf_counter() - cell_start
     print(
         "semantic cell OCR: "
@@ -129,7 +260,6 @@ def main() -> None:
     assembly = assemble_semantic_chord_tokens(
         cell_tokens,
         image=image,
-        skip_measure_indices=repeat_measure_indices,
     )
     print(f"semantic assembly: {len(assembly.tokens)} chord tokens")
 
@@ -154,11 +284,43 @@ def main() -> None:
         "semantic_cell_rejects": len(cell_rejects),
         "semantic_cell_runtime_seconds": round(cell_runtime, 3),
         "semantic_assembled_tokens": len(assembly.tokens),
-        "repeat_priority_measure_indices": sorted(repeat_measure_indices),
+        "repeat_probe_measure_indices": sorted(repeat_measure_indices),
+        "semantic_assembly_skip_measure_indices": [],
         "semantic_cell_region_names": list(region_names),
-        "semantic_cell_ocr_calls": expected_cell_ocr_calls,
+        "semantic_cell_ocr_calls": expected_core_cell_ocr_calls,
         "semantic_cell_measure_indices": (
             sorted(measure_indices) if measure_indices is not None else "all"
+        ),
+        "multi_chord_supplemental_region_names": list(
+            MULTI_CHORD_CHART_CELL_REGION_NAMES
+        ),
+        "multi_chord_supplemental_measure_indices": sorted(
+            supplemental_measure_indices
+        ),
+        "multi_chord_supplemental_ocr_calls": expected_root_anchor_probe_ocr_calls,
+        "multi_chord_supplemental_tokens": len(root_anchor_local_tokens),
+        "multi_chord_supplemental_rejects": (
+            len(root_anchor_probe_rejects) + len(root_anchor_local_rejects)
+        ),
+        "multi_chord_anchor_probe_tokens": len(root_anchor_probe_tokens),
+        "multi_chord_anchor_probe_rejects": len(root_anchor_probe_rejects),
+        "multi_chord_anchor_candidates": [
+            anchor.to_dict() for anchor in root_anchor_candidates
+        ],
+        "multi_chord_visual_anchor_candidates": [
+            anchor.to_dict() for anchor in visual_root_anchor_candidates
+        ],
+        "multi_chord_visual_anchor_measure_indices": sorted(
+            visual_multi_chord_measure_indices
+        ),
+        "multi_chord_visual_supplemental_measure_indices": sorted(
+            visual_supplemental_measure_indices
+        ),
+        "multi_chord_anchor_local_ocr_calls": root_anchor_local_ocr_calls,
+        "multi_chord_anchor_local_tokens": len(root_anchor_local_tokens),
+        "multi_chord_anchor_local_rejects": len(root_anchor_local_rejects),
+        "multi_chord_supplemental_plan": (
+            multi_chord_plan.diagnostics if multi_chord_plan is not None else None
         ),
         "region_allowlists_enabled": allowlists is not None,
         "region_allowlists": {
@@ -167,6 +329,7 @@ def main() -> None:
             if allowlists is not None and allowlists.get(region_name) is not None
         },
         "semantic_assembly": assembly.diagnostics,
+        "image_scaling": image_scale.to_dict(),
     }
 
     scan_regions: list[dict[str, Any]] = []
@@ -187,6 +350,25 @@ def main() -> None:
             source="cell_ocr_semantic",
         )
     )
+    if supplemental_measure_indices:
+        scan_regions.extend(
+            chart_cell_ocr_region_boxes(
+                image,
+                rows,
+                measure_indices=supplemental_measure_indices,
+                region_names=MULTI_CHORD_CHART_CELL_REGION_NAMES,
+                source="cell_ocr_root_anchor_probe",
+            )
+        )
+        scan_regions.extend(
+            chart_root_anchor_local_region_boxes(
+                image,
+                rows,
+                anchor_candidates=root_anchor_candidates,
+                measure_indices=supplemental_measure_indices,
+                source="cell_ocr_root_anchor",
+            )
+        )
 
     overlay_path = write_chord_chart_overlay(
         image=image,
@@ -197,14 +379,40 @@ def main() -> None:
         image=image,
         pages=result_payload["pages"],
         chart_ocr=result_payload["chart_ocr"],
-        ocr_tokens=[*page_tokens, *cell_tokens, *assembly.tokens],
+        ocr_tokens=[
+            *page_tokens,
+            *root_anchor_probe_tokens,
+            *cell_tokens,
+            *assembly.tokens,
+        ],
         ocr_rejects=[*page_rejects, *cell_rejects],
         scan_regions=scan_regions,
         output_dir=output_dir,
     )
+    scan_boundary_overlay_path = write_chord_chart_scan_boundary_overlay(
+        image=image,
+        pages=result_payload["pages"],
+        scan_regions=scan_regions,
+        chart_ocr=result_payload["chart_ocr"],
+        output_dir=output_dir,
+    )
+    root_ocr_bbox_overlay_path = write_chord_chart_root_ocr_bbox_overlay(
+        image=image,
+        pages=result_payload["pages"],
+        chart_ocr=result_payload["chart_ocr"],
+        output_dir=output_dir,
+    )
     result_payload["overlay_file"] = overlay_path.name
     result_payload["debug_overlay_file"] = debug_overlay_path.name
+    result_payload["scan_boundary_overlay_file"] = scan_boundary_overlay_path.name
+    result_payload["root_ocr_bbox_overlay_file"] = root_ocr_bbox_overlay_path.name
     result_payload["chart_ocr"]["debug_overlay_file"] = debug_overlay_path.name
+    result_payload["chart_ocr"]["scan_boundary_overlay_file"] = (
+        scan_boundary_overlay_path.name
+    )
+    result_payload["chart_ocr"]["root_ocr_bbox_overlay_file"] = (
+        root_ocr_bbox_overlay_path.name
+    )
 
     chord_chart_debug_path = export_chord_chart_debug_json(
         result_payload=result_payload,
@@ -226,9 +434,12 @@ def main() -> None:
                 "runtime_seconds": round(runtime_seconds, 2),
                 "page_runtime_seconds": round(page_runtime, 2),
                 "semantic_cell_runtime_seconds": round(cell_runtime, 2),
+                "image_scaling": image_scale.to_dict(),
                 "chord_chart_path": str(chord_chart_path),
                 "chord_chart_debug_path": str(chord_chart_debug_path),
                 "debug_overlay_path": str(debug_overlay_path),
+                "scan_boundary_overlay_path": str(scan_boundary_overlay_path),
+                "root_ocr_bbox_overlay_path": str(root_ocr_bbox_overlay_path),
                 "public_chord_count": len(public_payload.get("chords") or []),
                 "public_measure_count": public_payload.get("measure_count"),
                 "public_flow": public_payload.get("flow"),
@@ -250,9 +461,12 @@ def main() -> None:
         encoding="utf-8",
     )
 
+    print(f"wrote {overlay_path}")
     print(f"wrote {chord_chart_path}")
     print(f"wrote {chord_chart_debug_path}")
     print(f"wrote {debug_overlay_path}")
+    print(f"wrote {scan_boundary_overlay_path}")
+    print(f"wrote {root_ocr_bbox_overlay_path}")
     print(f"wrote {summary_path}")
     print(f"runtime={runtime_seconds:.2f}s")
 
@@ -350,6 +564,17 @@ def _count_expected_cell_calls(
                 count += region_count
             measure_index += 1
     return count
+
+
+def _all_measure_indices(rows: list[Any]) -> set[int]:
+    indices: set[int] = set()
+    measure_index = 1
+    for row in rows:
+        boundaries = getattr(row, "boundaries", [])
+        for _left, _right in zip(boundaries, boundaries[1:]):
+            indices.add(measure_index)
+            measure_index += 1
+    return indices
 
 
 def _repeat_measure_indices_from_payload(payload: dict[str, Any]) -> set[int]:

@@ -88,13 +88,17 @@ def parse_chord_chart_image(
 
     beats_per_bar = int(time_signature.get("numerator") or 4)
     metadata = _extract_metadata(tokens, rows, image_width=float(image.shape[1]))
-    section_markers = _find_section_markers(tokens, rows)
+    section_markers = _find_section_markers(tokens, rows, image=image)
     _apply_sections(rows, section_markers)
     _apply_visual_endings(image, rows)
 
     measures = _build_measure_cells(rows)
     cell_token_measure_indices = _cell_token_measure_indices(tokens, measures)
-    accepted_tokens: list[dict[str, Any]] = []
+    accepted_tokens: list[dict[str, Any]] = [
+        _section_marker_payload(marker)
+        for marker in section_markers
+        if marker.get("source") == "visual_section_detection"
+    ]
     detected_symbols: list[dict[str, Any]] = []
     unassigned_tokens: list[dict[str, Any]] = []
 
@@ -607,6 +611,8 @@ def _has_visible_time_signature_region(image: np.ndarray, rows: list[ChartRow]) 
 def _find_section_markers(
     tokens: list[OCRToken],
     rows: list[ChartRow],
+    *,
+    image: np.ndarray | None = None,
 ) -> list[dict[str, Any]]:
     markers: list[dict[str, Any]] = []
     for row in rows:
@@ -624,11 +630,220 @@ def _find_section_markers(
                         "row_index": row.index,
                         "bbox": list(token.bbox),
                         "confidence": token.confidence,
+                        "source": token.source,
                     }
                 )
                 break
 
+    if image is not None:
+        markers.extend(_find_visual_section_markers(image, rows, markers))
+
+    return sorted(markers, key=lambda marker: int(marker["row_index"]))
+
+
+def _find_visual_section_markers(
+    image: np.ndarray,
+    rows: list[ChartRow],
+    existing_markers: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    marked_rows = {int(marker["row_index"]) for marker in existing_markers}
+    markers: list[dict[str, Any]] = []
+
+    for row in rows:
+        if row.index in marked_rows:
+            continue
+
+        bbox = _visual_section_marker_bbox(image, row)
+        if bbox is None:
+            continue
+
+        label, confidence = _classify_visual_section_marker(image, bbox)
+        if label is None:
+            continue
+
+        markers.append(
+            {
+                "section": label,
+                "row_index": row.index,
+                "bbox": [float(value) for value in bbox],
+                "confidence": confidence,
+                "source": "visual_section_detection",
+            }
+        )
+
     return markers
+
+
+def _visual_section_marker_bbox(
+    image: np.ndarray,
+    row: ChartRow,
+) -> tuple[float, float, float, float] | None:
+    height, width = image.shape[:2]
+    marker_x0 = int(max(0, row.boundaries[0].x - 70))
+    marker_x1 = int(min(width, row.boundaries[0].x + 20))
+    marker_y0 = int(max(0, row.y_top - 90))
+    marker_y1 = int(min(height, row.y_top + 10))
+    if marker_x1 <= marker_x0 or marker_y1 <= marker_y0:
+        return None
+
+    crop = image[marker_y0:marker_y1, marker_x0:marker_x1]
+    gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
+    binary = np.zeros_like(gray, dtype=np.uint8)
+    binary[gray < 80] = 255
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        binary,
+        connectivity=8,
+    )
+
+    candidates: list[dict[str, float]] = []
+    row_height = max(1.0, row.y_bottom - row.y_top)
+    for index in range(1, count):
+        x, y, component_width, component_height, area = [
+            float(value) for value in stats[index]
+        ]
+        if not (20.0 <= component_width <= max(60.0, row_height * 0.58)):
+            continue
+        if not (max(26.0, row_height * 0.22) <= component_height <= row_height * 0.62):
+            continue
+
+        fill_ratio = area / max(component_width * component_height, 1.0)
+        if fill_ratio < 0.50:
+            continue
+
+        abs_x0 = marker_x0 + x
+        abs_y0 = marker_y0 + y
+        abs_x1 = abs_x0 + component_width
+        abs_y1 = abs_y0 + component_height
+        if abs_x0 > row.boundaries[0].x + 5:
+            continue
+        if not (row.y_top - 75 <= (abs_y0 + abs_y1) / 2.0 <= row.y_top):
+            continue
+
+        candidates.append(
+            {
+                "x0": abs_x0,
+                "y0": abs_y0,
+                "x1": abs_x1,
+                "y1": abs_y1,
+                "area": area,
+                "fill_ratio": fill_ratio,
+            }
+        )
+
+    if not candidates:
+        return None
+
+    best = max(candidates, key=lambda item: (item["area"], item["fill_ratio"]))
+    return best["x0"], best["y0"], best["x1"], best["y1"]
+
+
+def _classify_visual_section_marker(
+    image: np.ndarray,
+    bbox: tuple[float, float, float, float],
+) -> tuple[str | None, float | None]:
+    marker = _visual_section_marker_glyph_mask(image, bbox)
+    if marker is None:
+        return None, None
+
+    feature_label = _visual_section_marker_feature_label(marker)
+    if feature_label is not None:
+        return feature_label, 0.78
+
+    scores = {
+        letter: _binary_mask_iou(marker, _visual_section_letter_template(letter))
+        for letter in "ABCDEFG"
+    }
+    label, score = max(scores.items(), key=lambda item: item[1])
+    if score < 0.40:
+        return None, None
+    return label, float(score)
+
+
+def _visual_section_marker_glyph_mask(
+    image: np.ndarray,
+    bbox: tuple[float, float, float, float],
+) -> np.ndarray | None:
+    height, width = image.shape[:2]
+    x0, y0, x1, y1 = [int(round(value)) for value in bbox]
+    x0 = max(0, min(width, x0 + 3))
+    x1 = max(0, min(width, x1 - 3))
+    y0 = max(0, min(height, y0 + 3))
+    y1 = max(0, min(height, y1 - 3))
+    if x1 <= x0 or y1 <= y0:
+        return None
+
+    gray = cv2.cvtColor(image[y0:y1, x0:x1], cv2.COLOR_RGB2GRAY)
+    mask = np.zeros_like(gray, dtype=np.uint8)
+    mask[gray > 180] = 255
+    ys, xs = np.where(mask > 0)
+    if len(xs) == 0:
+        return None
+
+    glyph = mask[int(ys.min()) : int(ys.max()) + 1, int(xs.min()) : int(xs.max()) + 1]
+    if glyph.size == 0:
+        return None
+    return cv2.resize(glyph, (28, 32), interpolation=cv2.INTER_AREA)
+
+
+def _visual_section_marker_feature_label(mask: np.ndarray) -> str | None:
+    binary = mask > 127
+    if not np.any(binary):
+        return None
+
+    height, width = binary.shape
+    left = int(np.count_nonzero(binary[:, : width // 3]))
+    right = int(np.count_nonzero(binary[:, (width * 2) // 3 :]))
+    top = int(np.count_nonzero(binary[: height // 3, :]))
+    middle = int(np.count_nonzero(binary[height // 3 : (height * 2) // 3, :]))
+    bottom = int(np.count_nonzero(binary[(height * 2) // 3 :, :]))
+
+    if (
+        left > right * 1.55
+        and top > middle * 1.20
+        and bottom > middle * 1.20
+    ):
+        return "C"
+    return None
+
+
+def _visual_section_letter_template(letter: str) -> np.ndarray:
+    canvas = np.zeros((37, 32), dtype=np.uint8)
+    cv2.putText(
+        canvas,
+        letter,
+        (2, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.25,
+        255,
+        3,
+        cv2.LINE_AA,
+    )
+    ys, xs = np.where(canvas > 0)
+    if len(xs) == 0:
+        return cv2.resize(canvas, (28, 32), interpolation=cv2.INTER_AREA)
+    glyph = canvas[int(ys.min()) : int(ys.max()) + 1, int(xs.min()) : int(xs.max()) + 1]
+    return cv2.resize(glyph, (28, 32), interpolation=cv2.INTER_AREA)
+
+
+def _binary_mask_iou(left: np.ndarray, right: np.ndarray) -> float:
+    left_binary = left > 127
+    right_binary = right > 127
+    union = int(np.count_nonzero(left_binary | right_binary))
+    if union == 0:
+        return 0.0
+    intersection = int(np.count_nonzero(left_binary & right_binary))
+    return intersection / union
+
+
+def _section_marker_payload(marker: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "text": marker["section"],
+        "bbox": [float(value) for value in marker["bbox"]],
+        "confidence": marker.get("confidence"),
+        "source": marker.get("source"),
+        "kind": "section_marker",
+        "row_index": marker.get("row_index"),
+    }
 
 
 def _apply_sections(rows: list[ChartRow], markers: list[dict[str, Any]]) -> None:
